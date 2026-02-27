@@ -917,13 +917,11 @@ def main():
 
     logger.info("🗺️ Territory Bot ishga tushdi!")
 
-    async def run():
-        async with app:
-            await app.start()
-            await app.updater.start_polling(allowed_updates=["message", "callback_query"])
-            await invasion_checker(app)
+    async def post_init(application):
+        asyncio.create_task(invasion_checker(application))
 
-    asyncio.run(run())
+    app.post_init = post_init
+    app.run_polling(allowed_updates=["message", "callback_query"])
 
 
 if __name__ == "__main__":
