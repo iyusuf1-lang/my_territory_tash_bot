@@ -72,6 +72,8 @@ def init_db():
             total_km    REAL DEFAULT 0,
             zones_owned INTEGER DEFAULT 0,
             zones_taken INTEGER DEFAULT 0,
+            referred_by INTEGER DEFAULT NULL,
+            referral_count INTEGER DEFAULT 0,
             created_at  TEXT DEFAULT (datetime('now'))
         );
 
@@ -111,6 +113,14 @@ def init_db():
             finished_at TEXT,
             status      TEXT DEFAULT 'active',
             FOREIGN KEY (user_id) REFERENCES users(user_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS achievements (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id     INTEGER NOT NULL,
+            code        TEXT NOT NULL,
+            earned_at   TEXT DEFAULT (datetime('now')),
+            UNIQUE(user_id, code)
         );
         """)
         conn.commit()
@@ -367,7 +377,8 @@ def main_menu_kb() -> ReplyKeyboardMarkup:
         [KeyboardButton("📍 Joylashuvni yuborish", request_location=True)],
         [KeyboardButton("▶️ Trek boshlash"), KeyboardButton("⏹ Trek tugatish")],
         [KeyboardButton("🗺 Zonalarim"),     KeyboardButton("📊 Statistika")],
-        [KeyboardButton("🏆 Reyting"),       KeyboardButton("❓ Yordam")],
+        [KeyboardButton("🏆 Reyting"),       KeyboardButton("🏅 Yutuqlar")],
+        [KeyboardButton("👥 Referral"),       KeyboardButton("❓ Yordam")],
     ], resize_keyboard=True)
 
 
@@ -416,6 +427,28 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     upsert_user(user.id, user.username or "", user.first_name or "")
     db_user = get_user(user.id)
 
+    # Referral tekshirish: /start ref_123456
+    args = ctx.args
+    if args and args[0].startswith("ref_"):
+        try:
+            referrer_id = int(args[0].split("_")[1])
+            if apply_referral(user.id, referrer_id):
+                referrer = get_user(referrer_id)
+                if referrer:
+                    try:
+                        await ctx.bot.send_message(
+                            chat_id=referrer_id,
+                            text=f"👥 *{user.first_name}* sizning havolangiz orqali qo'shildi!\n"
+                                 f"Referral hisobingiz: {referrer['referral_count'] + 1} ta",
+                            parse_mode="Markdown",
+                        )
+                        await check_and_award(referrer_id, ctx.application,
+                                              get_user(referrer_id))
+                    except Exception:
+                        pass
+        except (ValueError, IndexError):
+            pass
+
     if not db_user or not db_user["team"]:
         await update.message.reply_text(
             "👋 *Toshkent Territory o'yiniga xush kelibsiz!*\n\n"
@@ -434,6 +467,50 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"👋 Qaytib keldingiz!\n{team['emoji']} Jamoa: {team['name']}",
             reply_markup=main_menu_kb(),
         )
+
+
+async def cmd_referral(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    db_user = get_user(user_id)
+    if not db_user:
+        await update.message.reply_text("Avval /start bosing!")
+        return
+
+    bot_info = await ctx.bot.get_me()
+    link = get_referral_link(user_id, bot_info.username)
+    ref_count = db_user.get("referral_count", 0)
+
+    await update.message.reply_text(
+        f"👥 *Referral tizimi*\n\n"
+        f"Do'stlaringizni taklif qiling va yutuqlar qozonging!\n\n"
+        f"🔗 Sizning havola:\n`{link}`\n\n"
+        f"👤 Taklif qilganlar: *{ref_count}* ta\n\n"
+        f"🏅 *Mukofotlar:*\n"
+        f"• 1 ta taklif → 👥 Do'st taklif qildi\n"
+        f"• 5 ta taklif → 👨‍👩‍👧‍👦 Jamoa quruvchi",
+        parse_mode="Markdown",
+        reply_markup=main_menu_kb(),
+    )
+
+
+async def cmd_achievements(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    earned = get_user_achievements(user_id)
+    earned_codes = {a["code"] for a in earned}
+
+    text = "🏅 *Yutuqlar*\n\n"
+    text += f"✅ Qozonilgan: {len(earned)}/{len(ACHIEVEMENTS)}\n\n"
+
+    for code, ach in ACHIEVEMENTS.items():
+        if code in earned_codes:
+            text += f"✅ {ach['name']}\n"
+        else:
+            text += f"🔒 {ach['name']}\n"
+        text += f"   _{ach['desc']}_\n\n"
+
+    await update.message.reply_text(
+        text, parse_mode="Markdown", reply_markup=main_menu_kb()
+    )
 
 
 async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -723,6 +800,12 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     elif text == "🏆 Reyting":
         await cmd_leaderboard(update, ctx)
 
+    elif text == "🏅 Yutuqlar":
+        await cmd_achievements(update, ctx)
+
+    elif text == "👥 Referral":
+        await cmd_referral(update, ctx)
+
     elif text == "❓ Yordam":
         await cmd_help(update, ctx)
 
@@ -778,6 +861,9 @@ async def handle_finish_trek(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                         )
                     except Exception as e:
                         logger.warning(f"Capture notif error: {e}")
+
+        # Achievement tekshirish
+        await check_and_award(user_id, update.get_bot(), get_user(user_id))
 
         msg += (
             f"\n✅ *Zona yaratildi #{zone_id}*\n"
@@ -936,6 +1022,188 @@ async def invasion_checker(app):
 # ══════════════════════════════════════════════════════
 
 
+
+# ══════════════════════════════════════════════════════
+# ACHIEVEMENTS
+# ══════════════════════════════════════════════════════
+
+ACHIEVEMENTS = {
+    "first_zone":    {"name": "🏴 Birinchi zona",       "desc": "Birinchi zonangizni yaratingiz"},
+    "zone_x5":       {"name": "🗺 Kartograf",            "desc": "5 ta zona yarating"},
+    "zone_x20":      {"name": "🌍 Hududboz",             "desc": "20 ta zona yarating"},
+    "first_capture": {"name": "⚔️ Birinchi hujum",       "desc": "Birinchi dushman zonasini egallang"},
+    "capture_x5":    {"name": "🔥 Tajovuzkor",           "desc": "5 ta zona egallang"},
+    "capture_x10":   {"name": "💀 Bosqinchi",            "desc": "10 ta zona egallang"},
+    "km_10":         {"name": "🏃 10km yugurdingiz",      "desc": "Jami 10 km yuring"},
+    "km_50":         {"name": "🚴 50km masofachi",        "desc": "Jami 50 km yuring"},
+    "km_100":        {"name": "🏅 100km legend",          "desc": "Jami 100 km yuring"},
+    "referral_1":    {"name": "👥 Do'st taklif qildi",   "desc": "1 do'st taklif qiling"},
+    "referral_5":    {"name": "👨‍👩‍👧‍👦 Jamoa quruvchi",     "desc": "5 do'st taklif qiling"},
+}
+
+
+def get_user_achievements(user_id: int) -> list:
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT code, earned_at FROM achievements WHERE user_id=? ORDER BY earned_at",
+            (user_id,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def award_achievement(user_id: int, code: str) -> bool:
+    """Achievement berish. Yangi bo'lsa True qaytaradi."""
+    try:
+        with get_db() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO achievements (user_id, code) VALUES (?, ?)",
+                (user_id, code)
+            )
+            return conn.execute(
+                "SELECT changes()"
+            ).fetchone()[0] > 0
+    except Exception:
+        return False
+
+
+async def check_and_award(user_id: int, app, db_user: dict = None):
+    """Foydalanuvchi statistikasiga qarab achievement berish"""
+    if not db_user:
+        db_user = get_user(user_id)
+    if not db_user:
+        return
+
+    awarded = []
+
+    # Zona achievementlar
+    zones_owned = db_user.get("zones_owned", 0)
+    zones_taken = db_user.get("zones_taken", 0)
+    total_km    = db_user.get("total_km", 0)
+    ref_count   = db_user.get("referral_count", 0)
+
+    checks = [
+        (zones_owned >= 1,  "first_zone"),
+        (zones_owned >= 5,  "zone_x5"),
+        (zones_owned >= 20, "zone_x20"),
+        (zones_taken >= 1,  "first_capture"),
+        (zones_taken >= 5,  "capture_x5"),
+        (zones_taken >= 10, "capture_x10"),
+        (total_km >= 10,    "km_10"),
+        (total_km >= 50,    "km_50"),
+        (total_km >= 100,   "km_100"),
+        (ref_count >= 1,    "referral_1"),
+        (ref_count >= 5,    "referral_5"),
+    ]
+
+    for condition, code in checks:
+        if condition and award_achievement(user_id, code):
+            awarded.append(code)
+
+    # Yangi achievement xabari yuborish
+    for code in awarded:
+        ach = ACHIEVEMENTS.get(code, {})
+        try:
+            await app.bot.send_message(
+                chat_id=user_id,
+                text=f"🏅 *Yangi yutuq!*\n\n"
+                     f"{ach.get('name', code)}\n"
+                     f"_{ach.get('desc', '')}_",
+                parse_mode="Markdown",
+            )
+        except Exception as e:
+            logger.warning(f"Achievement notify error: {e}")
+
+
+# ══════════════════════════════════════════════════════
+# REFERRAL
+# ══════════════════════════════════════════════════════
+
+def apply_referral(new_user_id: int, referrer_id: int):
+    """Yangi foydalanuvchiga referrer belgilash"""
+    if new_user_id == referrer_id:
+        return False
+    with get_db() as conn:
+        user = conn.execute(
+            "SELECT referred_by FROM users WHERE user_id=?", (new_user_id,)
+        ).fetchone()
+        if not user or user["referred_by"]:
+            return False  # Allaqachon referral bor
+        conn.execute(
+            "UPDATE users SET referred_by=? WHERE user_id=?",
+            (referrer_id, new_user_id)
+        )
+        conn.execute(
+            "UPDATE users SET referral_count = referral_count + 1 WHERE user_id=?",
+            (referrer_id,)
+        )
+        return True
+
+
+def get_referral_link(user_id: int, bot_username: str) -> str:
+    return f"https://t.me/{bot_username}?start=ref_{user_id}"
+
+
+# ══════════════════════════════════════════════════════
+# ZONE EXPIRY (vaqt cheklovi)
+# ══════════════════════════════════════════════════════
+
+ZONE_EXPIRE_DAYS = int(os.getenv("ZONE_EXPIRE_DAYS", "7"))  # Default: 7 kun
+
+
+async def expire_old_zones(app):
+    """Eski zonalarni neytrallashtirish (egasiz qilish)"""
+    while True:
+        try:
+            with get_db() as conn:
+                # 7 kundan eski, hech kim qayta egallmagan zonalar
+                old_zones = conn.execute("""
+                    SELECT z.*, u.first_name, u.team as owner_team
+                    FROM zones z
+                    JOIN users u ON z.owner_id = u.user_id
+                    WHERE z.active = 1
+                    AND z.created_at < datetime('now', ?)
+                    AND z.id NOT IN (
+                        SELECT DISTINCT zone_id FROM zone_history
+                        WHERE action = 'captured'
+                        AND captured_at > datetime('now', ?)
+                    )
+                """, (f"-{ZONE_EXPIRE_DAYS} days", f"-{ZONE_EXPIRE_DAYS} days")).fetchall()
+
+                for zone in old_zones:
+                    zone = dict(zone)
+                    # Zonani neytral qilish (system user = 0)
+                    conn.execute(
+                        "UPDATE zones SET owner_id=0, team='neutral' WHERE id=?",
+                        (zone["id"],)
+                    )
+                    conn.execute(
+                        "UPDATE users SET zones_owned = MAX(0, zones_owned-1) WHERE user_id=?",
+                        (zone["owner_id"],)
+                    )
+                    conn.execute("""
+                        INSERT INTO zone_history (zone_id, from_user, from_team, to_user, to_team, action)
+                        VALUES (?, ?, ?, 0, 'neutral', 'expired')
+                    """, (zone["id"], zone["owner_id"], zone["owner_team"]))
+
+                    # Egasiga xabar
+                    zone_name = zone["name"] or f"Zona #{zone['id']}"
+                    try:
+                        await app.bot.send_message(
+                            chat_id=zone["owner_id"],
+                            text=f"⏱ *Zona eskirdi!*\n\n"
+                                 f"🏴 {zone_name} neytral bo'ldi.\n"
+                                 f"_{ZONE_EXPIRE_DAYS} kun davomida himoya qilinmadi._\n\n"
+                                 f"Zonangizni qayta egallab oling! 🏃",
+                            parse_mode="Markdown",
+                        )
+                    except Exception as e:
+                        logger.warning(f"Expire notify error: {e}")
+
+        except Exception as e:
+            logger.error(f"Expire checker error: {e}")
+
+        await asyncio.sleep(3600)  # Har 1 soatda tekshirish
+
 async def handle_live_location(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Live location yangilanganda chaqiriladi (edited_message)"""
     user_id = update.effective_user.id
@@ -985,6 +1253,7 @@ async def handle_live_location(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def on_startup(app: Application) -> None:
     asyncio.create_task(invasion_checker(app))
+    asyncio.create_task(expire_old_zones(app))
 
 
 def main():
@@ -1004,6 +1273,8 @@ def main():
     app.add_handler(CommandHandler("leaderboard", cmd_leaderboard))
     app.add_handler(CommandHandler("zones",       cmd_zones))
     app.add_handler(CommandHandler("history",     cmd_history))
+    app.add_handler(CommandHandler("achievements", cmd_achievements))
+    app.add_handler(CommandHandler("referral",    cmd_referral))
     app.add_handler(MessageHandler(filters.LOCATION,                handle_location))
     app.add_handler(MessageHandler(filters.UpdateType.EDITED & filters.LOCATION, handle_live_location))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
