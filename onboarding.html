@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Territory - Onboarding</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@700;900&family=Exo+2:wght@400;600&display=swap');
+
+* { margin:0; padding:0; box-sizing:border-box; }
+
+:root {
+  --red:#e94560;
+  --blue:#3d7eff;
+  --green:#00e676;
+  --yellow:#ffd600;
+  --dark:#080c1a;
+  --dark2:#0d1326;
+  --card:#111827;
+}
+
+body {
+  background: var(--dark);
+  color: #fff;
+  font-family: 'Exo 2', sans-serif;
+  height: 100vh;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* FULL SCREEN */
+.phone {
+  width: 100vw;
+  height: 100vh;
+  background: var(--dark);
+  border-radius: 0;
+  border: none;
+  overflow: hidden;
+  position: relative;
+}
+
+/* SLIDES */
+.slides {
+  display: flex;
+  width: 500%;
+  height: 100%;
+  transition: transform 0.6s cubic-bezier(0.77,0,0.18,1);
+}
+
+.slide {
+  width: 20%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 24px;
+  position: relative;
+  overflow: hidden;
+}
+
+/* ── SLIDE 1: Welcome ── */
+.slide-1 { background: var(--dark); }
+
+.slide-1 .bg-grid {
+  position: absolute; inset: 0;
+  background-image:
+    linear-gradient(rgba(233,69,96,0.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(233,69,96,0.08) 1px, transparent 1px);
+  background-size: 32px 32px;
+  animation: grid-move 4s linear infinite;
+}
+
+@keyframes grid-move {
+  0%   { transform: translateY(0); }
+  100% { transform: translateY(32px); }
+}
+
+.slide-1 .radar {
+  width: 200px; height: 200px;
+  position: relative;
+  margin-bottom: 32px;
+  animation: fade-in 0.8s ease forwards;
+}
+
+.radar-ring {
+  position: absolute;
+  border-radius: 50%;
+  border: 1.5px solid rgba(233,69,96,0.4);
+  top: 50%; left: 50%;
+  transform: translate(-50%,-50%);
+  animation: radar-pulse 2s ease-in-out infinite;
+}
+.radar-ring:nth-child(1) { width:60px;  height:60px;  animation-delay:0s; }
+.radar-ring:nth-child(2) { width:100px; height:100px; animation-delay:0.3s; }
+.radar-ring:nth-child(3) { width:140px; height:140px; animation-delay:0.6s; }
+.radar-ring:nth-child(4) { width:180px; height:180px; animation-delay:0.9s; }
+.radar-ring:nth-child(5) { width:200px; height:200px; animation-delay:1.2s; }
+
+@keyframes radar-pulse {
+  0%,100% { opacity:0.5; border-color:rgba(233,69,96,0.4); }
+  50%      { opacity:1;   border-color:rgba(233,69,96,0.9); }
+}
+
+.radar-center {
+  position: absolute;
+  width: 20px; height: 20px;
+  background: var(--red);
+  border-radius: 50%;
+  top: 50%; left: 50%;
+  transform: translate(-50%,-50%);
+  box-shadow: 0 0 20px var(--red);
+  animation: center-pulse 1s ease-in-out infinite alternate;
+}
+@keyframes center-pulse {
+  from { box-shadow: 0 0 10px var(--red); }
+  to   { box-shadow: 0 0 30px var(--red), 0 0 50px rgba(233,69,96,0.4); }
+}
+
+/* Dots on radar */
+.radar-dot {
+  position: absolute;
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  animation: dot-appear 3s ease-in-out infinite;
+}
+.radar-dot:nth-child(6)  { top:25%; left:60%; background:var(--blue);   animation-delay:0.5s; }
+.radar-dot:nth-child(7)  { top:65%; left:30%; background:var(--green);  animation-delay:1s; }
+.radar-dot:nth-child(8)  { top:40%; left:75%; background:var(--yellow); animation-delay:1.5s; }
+.radar-dot:nth-child(9)  { top:70%; left:65%; background:var(--red);    animation-delay:2s; }
+
+@keyframes dot-appear {
+  0%,100% { opacity:0.3; transform:scale(0.8); }
+  50%      { opacity:1;   transform:scale(1.3); box-shadow:0 0 10px currentColor; }
+}
+
+.slide-1 h1 {
+  font-family: 'Orbitron', monospace;
+  font-size: 26px;
+  font-weight: 900;
+  letter-spacing: 2px;
+  text-align: center;
+  color: #fff;
+  animation: fade-up 0.8s 0.2s both;
+}
+.slide-1 h1 span { color: var(--red); }
+.slide-1 .sub {
+  font-size: 13px;
+  color: #888;
+  text-align: center;
+  margin-top: 8px;
+  letter-spacing: 1px;
+  animation: fade-up 0.8s 0.4s both;
+}
+
+/* ── SLIDE 2: Trek ── */
+.slide-2 {
+  background: linear-gradient(160deg, #080c1a 0%, #0a1428 100%);
+}
+
+.trek-map {
+  width: 280px; height: 200px;
+  position: relative;
+  margin-bottom: 28px;
+}
+
+.trek-map svg {
+  width: 100%; height: 100%;
+}
+
+.trek-path {
+  fill: none;
+  stroke: var(--green);
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 600;
+  stroke-dashoffset: 600;
+  animation: draw-path 2s ease forwards 0.3s;
+}
+
+.trek-path-fill {
+  fill: rgba(0,230,118,0.12);
+  stroke: none;
+  opacity: 0;
+  animation: fill-appear 0.5s ease forwards 2.2s;
+}
+
+@keyframes draw-path {
+  to { stroke-dashoffset: 0; }
+}
+@keyframes fill-appear {
+  to { opacity: 1; }
+}
+
+.trek-dot-start {
+  fill: var(--green);
+  animation: dot-pop 0.3s ease forwards 0.3s;
+  transform-origin: center;
+  transform: scale(0);
+}
+.trek-dot-end {
+  fill: var(--green);
+  animation: dot-pop 0.3s ease forwards 2.2s;
+  transform-origin: center;
+  transform: scale(0);
+}
+@keyframes dot-pop {
+  to { transform: scale(1); }
+}
+
+.slide-2 .icon-big { font-size: 48px; margin-bottom: 16px; animation: bounce-in 0.6s both; }
+.slide-2 h2 { font-family:'Orbitron',monospace; font-size:18px; color:var(--green); text-align:center; animation: fade-up 0.6s 0.2s both; }
+.slide-2 p  { font-size:13px; color:#aaa; text-align:center; margin-top:8px; line-height:1.6; animation: fade-up 0.6s 0.4s both; }
+
+/* ── SLIDE 3: Capture ── */
+.slide-3 { background: linear-gradient(160deg, #0d0810 0%, #150a1a 100%); }
+
+.battle-scene {
+  width: 260px; height: 180px;
+  position: relative;
+  margin-bottom: 24px;
+}
+
+.zone-enemy {
+  position: absolute;
+  width: 110px; height: 110px;
+  border-radius: 50%;
+  background: rgba(61,126,255,0.15);
+  border: 2px solid var(--blue);
+  top: 50%; left: 50%;
+  transform: translate(-50%,-50%);
+  animation: zone-shake 0.5s ease 2s, zone-capture 0.5s ease 2.5s forwards;
+}
+
+.zone-enemy::after {
+  content: '🔵';
+  position: absolute;
+  top:50%; left:50%;
+  transform: translate(-50%,-50%);
+  font-size: 28px;
+}
+
+.runner {
+  position: absolute;
+  width: 28px; height: 28px;
+  background: var(--red);
+  border-radius: 50%;
+  border: 2px solid #fff;
+  display: flex; align-items:center; justify-content:center;
+  font-size: 14px;
+  animation: run-around 2.4s linear forwards;
+  top: 14px; left: 50%;
+}
+
+@keyframes run-around {
+  0%   { offset-distance:0%;   }
+  100% { offset-distance:100%; }
+}
+
+/* CSS motion path */
+.runner {
+  offset-path: ellipse(90px 90px at 130px 90px);
+  offset-distance: 0%;
+  animation: run-path 2.4s linear forwards;
+  position: absolute;
+  top: 0; left: 0;
+}
+
+@keyframes run-path {
+  from { offset-distance: 0%; }
+  to   { offset-distance: 100%; }
+}
+
+@keyframes zone-shake {
+  0%,100% { transform:translate(-50%,-50%) rotate(0); }
+  25%      { transform:translate(-48%,-50%) rotate(-3deg); }
+  75%      { transform:translate(-52%,-50%) rotate(3deg); }
+}
+
+@keyframes zone-capture {
+  to {
+    background: rgba(233,69,96,0.15);
+    border-color: var(--red);
+  }
+}
+
+.zone-enemy.captured::after { content: '🔴'; }
+
+.slide-3 h2 { font-family:'Orbitron',monospace; font-size:18px; color:var(--red); text-align:center; animation: fade-up 0.6s 0.2s both; }
+.slide-3 p  { font-size:13px; color:#aaa; text-align:center; margin-top:8px; line-height:1.6; animation: fade-up 0.6s 0.4s both; }
+
+/* ── SLIDE 4: Teams ── */
+.slide-4 { background: var(--dark2); }
+
+.teams-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  width: 100%;
+  margin-bottom: 28px;
+}
+
+.team-card {
+  border-radius: 16px;
+  padding: 16px;
+  text-align: center;
+  border: 1.5px solid;
+  animation: card-pop 0.4s ease both;
+  cursor: pointer;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+.team-card:hover {
+  transform: scale(1.05);
+}
+.team-card:nth-child(1) { border-color:var(--red);    background:rgba(233,69,96,0.1);  animation-delay:0.1s; }
+.team-card:nth-child(2) { border-color:var(--blue);   background:rgba(61,126,255,0.1); animation-delay:0.2s; }
+.team-card:nth-child(3) { border-color:var(--green);  background:rgba(0,230,118,0.1);  animation-delay:0.3s; }
+.team-card:nth-child(4) { border-color:var(--yellow); background:rgba(255,214,0,0.1);  animation-delay:0.4s; }
+
+.team-card .emoji { font-size: 32px; display:block; margin-bottom:6px; }
+.team-card .name  { font-size: 12px; font-weight:600; color:#ddd; }
+
+@keyframes card-pop {
+  from { opacity:0; transform:scale(0.8) translateY(10px); }
+  to   { opacity:1; transform:scale(1) translateY(0); }
+}
+
+.slide-4 h2 { font-family:'Orbitron',monospace; font-size:16px; color:#fff; text-align:center; animation: fade-up 0.6s both; }
+.slide-4 p  { font-size:12px; color:#888; text-align:center; margin-top:6px; animation: fade-up 0.6s 0.2s both; }
+
+/* ── SLIDE 5: Ready ── */
+.slide-5 { background: var(--dark); }
+
+.slide-5 .bg-grid {
+  position: absolute; inset: 0;
+  background-image:
+    linear-gradient(rgba(61,126,255,0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(61,126,255,0.06) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+.trophy {
+  font-size: 80px;
+  animation: trophy-entrance 1s cubic-bezier(0.34,1.56,0.64,1) both;
+  margin-bottom: 20px;
+  filter: drop-shadow(0 0 20px gold);
+}
+@keyframes trophy-entrance {
+  from { transform:scale(0) rotate(-20deg); opacity:0; }
+  to   { transform:scale(1) rotate(0deg);  opacity:1; }
+}
+
+.slide-5 h2 {
+  font-family:'Orbitron',monospace;
+  font-size:22px; font-weight:900;
+  text-align:center;
+  animation: fade-up 0.6s 0.3s both;
+}
+.slide-5 h2 span { color:var(--red); }
+.slide-5 p {
+  font-size:13px; color:#888;
+  text-align:center; margin-top:10px;
+  line-height:1.7;
+  animation: fade-up 0.6s 0.5s both;
+}
+
+.start-btn {
+  margin-top: 28px;
+  background: linear-gradient(135deg, var(--red), #ff6b6b);
+  color: #fff;
+  border: none;
+  border-radius: 16px;
+  padding: 14px 48px;
+  font-family: 'Orbitron', monospace;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  animation: fade-up 0.6s 0.7s both, btn-glow 2s ease-in-out 1.3s infinite alternate;
+  letter-spacing: 1px;
+}
+@keyframes btn-glow {
+  from { box-shadow: 0 4px 20px rgba(233,69,96,0.4); }
+  to   { box-shadow: 0 4px 40px rgba(233,69,96,0.8), 0 0 60px rgba(233,69,96,0.3); }
+}
+
+/* ── NAVIGATION ── */
+.nav {
+  position: absolute;
+  bottom: 24px; left: 0; right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.dot-nav {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.2);
+  cursor: pointer;
+  transition: all 0.3s;
+}
+.dot-nav.active {
+  background: var(--red);
+  width: 24px;
+  border-radius: 4px;
+  box-shadow: 0 0 8px var(--red);
+}
+
+.next-btn {
+  position: absolute;
+  bottom: 70px; right: 20px;
+  background: var(--red);
+  border: none;
+  color: #fff;
+  width: 48px; height: 48px;
+  border-radius: 50%;
+  font-size: 20px;
+  cursor: pointer;
+  box-shadow: 0 4px 20px rgba(233,69,96,0.5);
+  transition: transform 0.2s;
+  display: flex; align-items:center; justify-content:center;
+}
+.next-btn:active { transform: scale(0.9); }
+
+/* ── ANIMATIONS ── */
+@keyframes fade-up {
+  from { opacity:0; transform:translateY(20px); }
+  to   { opacity:1; transform:translateY(0); }
+}
+@keyframes fade-in {
+  from { opacity:0; }
+  to   { opacity:1; }
+}
+@keyframes bounce-in {
+  from { transform:scale(0); opacity:0; }
+  60%  { transform:scale(1.2); }
+  to   { transform:scale(1); opacity:1; }
+}
+</style>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+</head>
+<body>
+
+<div class="phone">
+  <div class="slides" id="slides">
+
+    <!-- SLIDE 1: Welcome -->
+    <div class="slide slide-1">
+      <div class="bg-grid"></div>
+      <div class="radar">
+        <div class="radar-ring"></div>
+        <div class="radar-ring"></div>
+        <div class="radar-ring"></div>
+        <div class="radar-ring"></div>
+        <div class="radar-ring"></div>
+        <div class="radar-center"></div>
+        <div class="radar-dot"></div>
+        <div class="radar-dot"></div>
+        <div class="radar-dot"></div>
+        <div class="radar-dot"></div>
+      </div>
+      <h1>TERRITORY<br><span>TASHKENT</span></h1>
+      <p class="sub">HUDUDIY O'YIN • GPS • REAL-TIME</p>
+    </div>
+
+    <!-- SLIDE 2: Trek -->
+    <div class="slide slide-2">
+      <div class="trek-map">
+        <svg viewBox="0 0 280 200">
+          <path class="trek-path-fill"
+            d="M 60 160 L 80 80 L 140 40 L 210 70 L 230 140 L 180 175 L 100 170 Z"/>
+          <path class="trek-path"
+            d="M 60 160 L 80 80 L 140 40 L 210 70 L 230 140 L 180 175 L 100 170 L 60 160"/>
+          <circle class="trek-dot-start" cx="60" cy="160" r="6"/>
+          <circle class="trek-dot-end"   cx="60" cy="160" r="8"/>
+        </svg>
+      </div>
+      <h2>🏃 TREK YOZING</h2>
+      <p>GPS bilan yuring va aylana yasang.<br>Yopiq hudud <b style="color:#00e676">SIZNING ZONANGIZ</b> bo'ladi!</p>
+    </div>
+
+    <!-- SLIDE 3: Capture -->
+    <div class="slide slide-3">
+      <div class="battle-scene">
+        <div class="zone-enemy" id="zone-enemy"></div>
+        <div class="runner">🏃</div>
+      </div>
+      <h2>⚔️ HUJUM QILING</h2>
+      <p>Dushman zonasini aylanib chiqing.<br>Zona <b style="color:var(--red)">SIZGA O'TADI!</b><br>Egasi darhol xabar oladi 🔔</p>
+    </div>
+
+    <!-- SLIDE 4: Teams -->
+    <div class="slide slide-4">
+      <h2>🎽 JAMOA TANLANG</h2>
+      <p style="margin-bottom:20px">O'z jamoangiz uchun hudud egallang</p>
+      <div class="teams-grid">
+        <div class="team-card"><span class="emoji">🔴</span><span class="name">QIZIL</span></div>
+        <div class="team-card"><span class="emoji">🔵</span><span class="name">KO'K</span></div>
+        <div class="team-card"><span class="emoji">🟢</span><span class="name">YASHIL</span></div>
+        <div class="team-card"><span class="emoji">🟡</span><span class="name">SARIQ</span></div>
+      </div>
+      <p>Eng ko'p hudud egallagan jamoa<br><b style="color:var(--yellow)">YUTADI! 🏆</b></p>
+    </div>
+
+    <!-- SLIDE 5: Ready -->
+    <div class="slide slide-5">
+      <div class="bg-grid"></div>
+      <div class="trophy">🏆</div>
+      <h2>TAYYOR<br><span>BOSHLANG!</span></h2>
+      <p>Jamoa tanlang, yuring,<br>hudud egallang va<br><b style="color:#fff">LIDERLIK JADVALIDA</b> birinchi bo'ling!</p>
+      <button class="start-btn" id="start-btn" onclick="finishOnboarding()">
+        BOSHLASH →
+      </button>
+    </div>
+
+  </div>
+
+  <!-- Navigation dots -->
+  <div class="nav" id="nav">
+    <div class="dot-nav active" onclick="goTo(0)"></div>
+    <div class="dot-nav" onclick="goTo(1)"></div>
+    <div class="dot-nav" onclick="goTo(2)"></div>
+    <div class="dot-nav" onclick="goTo(3)"></div>
+    <div class="dot-nav" onclick="goTo(4)"></div>
+  </div>
+
+  <!-- Next button -->
+  <button class="next-btn" id="next-btn" onclick="nextSlide()">›</button>
+</div>
+
+<script>
+let current = 0;
+const total = 5;
+
+function goTo(idx) {
+  current = idx;
+  document.getElementById("slides").style.transform = `translateX(-${idx * 20}%)`;
+  document.querySelectorAll(".dot-nav").forEach((d,i) => {
+    d.classList.toggle("active", i === idx);
+  });
+  // Oxirgi slayd — next tugmasini yashirish
+  document.getElementById("next-btn").style.display =
+    idx === total - 1 ? "none" : "flex";
+}
+
+function nextSlide() {
+  if (current < total - 1) goTo(current + 1);
+}
+
+// Swipe support
+let startX = 0;
+const phone = document.querySelector(".phone");
+phone.addEventListener("touchstart", e => startX = e.touches[0].clientX);
+phone.addEventListener("touchend", e => {
+  const diff = startX - e.changedTouches[0].clientX;
+  if (diff > 50) nextSlide();
+  else if (diff < -50 && current > 0) goTo(current - 1);
+});
+
+// Auto advance first slide after 2s
+setTimeout(() => {
+  if (current === 0) goTo(1);
+}, 3000);
+
+// Telegram WebApp integration
+const tg = window.Telegram?.WebApp;
+if (tg) {
+  tg.ready();
+  tg.expand();
+  tg.MainButton.hide();
+}
+
+function finishOnboarding() {
+  // Telegram ga xabar yuborib Mini App ni yopish
+  if (tg) {
+    tg.sendData(JSON.stringify({ action: "onboarding_done" }));
+  } else {
+    alert("Bot da /start bosing! 🚀");
+  }
+}
+</script>
+
+</body>
+</html>
