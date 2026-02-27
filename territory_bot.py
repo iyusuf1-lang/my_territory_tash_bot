@@ -92,6 +92,7 @@ def init_db():
             radius_m    REAL,
             area_m2     REAL DEFAULT 0,
             active      INTEGER DEFAULT 1,
+            photo_url   TEXT DEFAULT NULL,
             created_at  TEXT DEFAULT (datetime('now')),
             FOREIGN KEY (owner_id) REFERENCES users(user_id)
         );
@@ -260,6 +261,14 @@ def create_zone_circle(user_id, team, lat, lng, radius) -> int:
     return zone_id
 
 
+async def create_zone_circle_with_photo(bot, user_id, team, lat, lng, radius) -> int:
+    zone_id = create_zone_circle(user_id, team, lat, lng, radius)
+    photo_url = await get_user_photo_url(bot, user_id)
+    if photo_url:
+        update_zone_photo(zone_id, photo_url)
+    return zone_id
+
+
 def create_zone_polygon(user_id, team, points) -> int:
     geom = json.dumps(points)
     clat, clng = polygon_centroid(points)
@@ -276,13 +285,21 @@ def create_zone_polygon(user_id, team, points) -> int:
     return zone_id
 
 
+async def create_zone_polygon_with_photo(bot, user_id, team, points) -> int:
+    zone_id = create_zone_polygon(user_id, team, points)
+    photo_url = await get_user_photo_url(bot, user_id)
+    if photo_url:
+        update_zone_photo(zone_id, photo_url)
+    return zone_id
+
+
 def capture_zone(zone_id, new_owner, new_team) -> dict | None:
     with get_db() as conn:
         z = conn.execute("SELECT * FROM zones WHERE id=?", (zone_id,)).fetchone()
         if not z:
             return None
         z = dict(z)
-        conn.execute("UPDATE zones SET owner_id=?, team=? WHERE id=?", (new_owner, new_team, zone_id))
+        conn.execute("UPDATE zones SET owner_id=?, team=?, photo_url=NULL WHERE id=?", (new_owner, new_team, zone_id))
         conn.execute("""
             INSERT INTO zone_history (zone_id, from_user, from_team, to_user, to_team, action)
             VALUES (?, ?, ?, ?, ?, 'captured')
@@ -313,6 +330,28 @@ def get_user_zones(user_id) -> list:
         return [dict(r) for r in conn.execute(
             "SELECT * FROM zones WHERE owner_id=? AND active=1", (user_id,)
         ).fetchall()]
+
+
+async def get_user_photo_url(bot, user_id: int) -> str | None:
+    """Foydalanuvchi Telegram profil rasmini URL sifatida olish"""
+    try:
+        photos = await bot.get_user_profile_photos(user_id, limit=1)
+        if photos.total_count == 0:
+            return None
+        file_id = photos.photos[0][-1].file_id
+        file = await bot.get_file(file_id)
+        return f"https://api.telegram.org/file/bot{bot.token}/{file.file_path}"
+    except Exception as e:
+        logger.warning(f"Photo fetch error for {user_id}: {e}")
+        return None
+
+
+def update_zone_photo(zone_id: int, photo_url: str):
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE zones SET photo_url=? WHERE id=?",
+            (photo_url, zone_id)
+        )
 
 
 def get_zone_history(zone_id) -> list:
@@ -870,7 +909,7 @@ async def handle_finish_trek(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     if closed:
         team     = db_user["team"]
-        zone_id  = create_zone_polygon(user_id, team, points)
+        zone_id  = await create_zone_polygon_with_photo(update.get_bot(), user_id, team, points)
         area     = polygon_area_m2(points)
         captured = []
 
@@ -982,7 +1021,7 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             return
 
         team    = db_user["team"]
-        zone_id = create_zone_circle(user_id, team, lat, lng, radius)
+        zone_id = await create_zone_circle_with_photo(ctx.bot, user_id, team, lat, lng, radius)
         ctx.user_data["mode"] = MODE_IDLE
         ctx.user_data.pop("circle_lat", None)
         ctx.user_data.pop("circle_lng", None)
@@ -1282,7 +1321,9 @@ async def api_zones(request: web.Request) -> web.Response:
                 "team": z["team"],
                 "team_name": team_info["name"],
                 "team_emoji": team_info["emoji"],
+                "owner_id": z["owner_id"],
                 "owner_name": owner["first_name"] if owner else "Neytral",
+                "photo_url": z["photo_url"] if z["photo_url"] else None,
                 "center_lat": z["center_lat"],
                 "center_lng": z["center_lng"],
                 "radius_m": z.get("radius_m"),
