@@ -465,12 +465,91 @@ def radius_kb() -> InlineKeyboardMarkup:
 # HANDLERS
 # ══════════════════════════════════════════════════════
 
+# ── Onboarding slaydlari ──
+ONBOARDING_SLIDES = [
+    {
+        "text": (
+            "🎯 *TERRITORY TASHKENT*\n"
+            "━━━━━━━━━━━━━━━━━━\n\n"
+            "Toshkentdagi hududiy o'yinga xush kelibsiz!\n\n"
+            "📍 *GPS* bilan yuring\n"
+            "🏴 *Hudud* egallang\n"
+            "⚔️ *Raqiblar* bilan kurashing\n"
+            "🏆 *Lider* bo'ling!\n\n"
+            "_1 / 4_ →"
+        ),
+        "buttons": [[("Keyingisi →", "onboard_2")]],
+    },
+    {
+        "text": (
+            "🏃 *TREK YOZING*\n"
+            "━━━━━━━━━━━━━━━━━━\n\n"
+            "1️⃣ *Trek boshlash* tugmasini bosing\n"
+            "2️⃣ *Live joylashuvni ulang* (15 daqiqa)\n"
+            "3️⃣ Aylana yasab yuring 🗺\n"
+            "4️⃣ Boshlang'ich nuqtaga qaytib keling\n"
+            "5️⃣ *Trek tugatish* → Zona yaratiladi! ✅\n\n"
+            "📐 *Minimal masofa:* ~100 metr\n\n"
+            "_2 / 4_ →"
+        ),
+        "buttons": [[("← Orqaga", "onboard_1"), ("Keyingisi →", "onboard_3")]],
+    },
+    {
+        "text": (
+            "⚔️ *HUJUM QILING*\n"
+            "━━━━━━━━━━━━━━━━━━\n\n"
+            "Dushman zonasini *egallash* uchun:\n\n"
+            "1️⃣ Dushman zonasini toping\n"
+            "2️⃣ Trek boshlang\n"
+            "3️⃣ Zona atrofini *aylanib chiqing* 🔄\n"
+            "4️⃣ Trek tugating → Zona *SIZNIKI!* 🏴\n\n"
+            "🔔 Egasi darhol *xabar* oladi!\n"
+            "⏱ Zona *7 kun* egasiz qolsa neytral bo'ladi\n\n"
+            "_3 / 4_ →"
+        ),
+        "buttons": [[("← Orqaga", "onboard_2"), ("Keyingisi →", "onboard_4")]],
+    },
+    {
+        "text": (
+            "🎽 *JAMOA TANLANG*\n"
+            "━━━━━━━━━━━━━━━━━━\n\n"
+            "🔴 *Qizil* — Jangovar\n"
+            "🔵 *Ko'k* — Strategik\n"
+            "🟢 *Yashil* — Kengayuvchi\n"
+            "🟡 *Sariq* — Tezkor\n\n"
+            "🏆 *Eng ko'p hudud* egallagan jamoa yutadi!\n\n"
+            "👇 *Jamoangizni tanlang:*\n\n"
+            "_4 / 4_"
+        ),
+        "buttons": [
+            [("🔴 Qizil", "team_red"),   ("🔵 Ko'k",   "team_blue")],
+            [("🟢 Yashil", "team_green"), ("🟡 Sariq",  "team_yellow")],
+        ],
+    },
+]
+
+
+async def send_onboarding(chat_id, slide_idx, bot, message=None):
+    slide = ONBOARDING_SLIDES[slide_idx]
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton(t, callback_data=cd) for t, cd in row]
+        for row in slide["buttons"]
+    ])
+    if message:
+        try:
+            await message.edit_text(slide["text"], parse_mode="Markdown", reply_markup=kb)
+            return
+        except Exception:
+            pass
+    await bot.send_message(chat_id, slide["text"], parse_mode="Markdown", reply_markup=kb)
+
+
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     upsert_user(user.id, user.username or "", user.first_name or "")
     db_user = get_user(user.id)
 
-    # Referral tekshirish: /start ref_123456
+    # Referral tekshirish
     args = ctx.args
     if args and args[0].startswith("ref_"):
         try:
@@ -481,102 +560,29 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     try:
                         await ctx.bot.send_message(
                             chat_id=referrer_id,
-                            text=f"👥 *{user.first_name}* sizning havolangiz orqali qo'shildi!\n"
-                                 f"Referral hisobingiz: {referrer['referral_count'] + 1} ta",
+                            text=f"👥 *{user.first_name}* sizning havolangiz orqali qo'shildi!",
                             parse_mode="Markdown",
                         )
-                        await check_and_award(referrer_id, ctx.application,
-                                              get_user(referrer_id))
+                        await check_and_award(referrer_id, ctx.application, get_user(referrer_id))
                     except Exception:
                         pass
         except (ValueError, IndexError):
             pass
 
     if not db_user or not db_user["team"]:
-        await update.message.reply_text(
-            "👋 *Toshkent Territory o'yiniga xush kelibsiz!*\n\n"
-            "🏃 *Qanday ishlaydi:*\n"
-            "• GPS trek yozib aylana yasang → hudud siznikiiga o'tadi\n"
-            "• Joylashuvdan doira zona yarating\n"
-            "• Dushman zonasini aylanib o'ting → zona siznikiiga o'tadi\n"
-            "• Kimdir zonangizga yaqinlashsa → xabar olasiz!\n\n"
-            "🎽 *Avval jamoa tanlang:*",
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=team_kb(),
-        )
+        # Yangi foydalanuvchi — onboarding
+        await send_onboarding(user.id, 0, ctx.bot)
     else:
         team = TEAMS[db_user["team"]]
-        # Faqat birinchi marta yoki /start so'ralganda menyu ko'rsatish
         await update.message.reply_text(
             f"👋 *Xush kelibsiz, {db_user['first_name']}!*\n"
             f"{team['emoji']} Jamoa: {team['name']}\n\n"
             f"🗺 Zonalar: *{db_user['zones_owned']}* ta\n"
             f"🏃 Masofa: *{db_user['total_km']:.1f}* km\n"
             f"⚔️ Egallangan: *{db_user['zones_taken']}* ta",
-            parse_mode=ParseMode.MARKDOWN,
+            parse_mode="Markdown",
             reply_markup=main_menu_kb(),
         )
-
-
-async def cmd_map(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Mini App xaritasini ochish"""
-    mini_app_url = os.getenv("MINI_APP_URL", "https://YOUR_GITHUB_USERNAME.github.io/my_territory_tash_bot/")
-    
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton(
-            "🌍 Xaritani ochish",
-            web_app={"url": mini_app_url}
-        )]
-    ])
-    await update.message.reply_text(
-        "🌍 *Territory Xaritasi*\n\nBarcha zonalarni xaritada ko'ring!",
-        parse_mode="Markdown",
-        reply_markup=keyboard,
-    )
-
-
-async def cmd_referral(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    db_user = get_user(user_id)
-    if not db_user:
-        await update.message.reply_text("Avval /start bosing!")
-        return
-
-    bot_info = await ctx.bot.get_me()
-    link = get_referral_link(user_id, bot_info.username)
-    ref_count = db_user.get("referral_count", 0)
-
-    await update.message.reply_text(
-        f"👥 *Referral tizimi*\n\n"
-        f"Do'stlaringizni taklif qiling va yutuqlar qozonging!\n\n"
-        f"🔗 Sizning havola:\n`{link}`\n\n"
-        f"👤 Taklif qilganlar: *{ref_count}* ta\n\n"
-        f"🏅 *Mukofotlar:*\n"
-        f"• 1 ta taklif → 👥 Do'st taklif qildi\n"
-        f"• 5 ta taklif → 👨‍👩‍👧‍👦 Jamoa quruvchi",
-        parse_mode="Markdown",
-        reply_markup=main_menu_kb(),
-    )
-
-
-async def cmd_achievements(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    earned = get_user_achievements(user_id)
-    earned_codes = {a["code"] for a in earned}
-
-    text = "🏅 *Yutuqlar*\n\n"
-    text += f"✅ Qozonilgan: {len(earned)}/{len(ACHIEVEMENTS)}\n\n"
-
-    for code, ach in ACHIEVEMENTS.items():
-        if code in earned_codes:
-            text += f"✅ {ach['name']}\n"
-        else:
-            text += f"🔒 {ach['name']}\n"
-        text += f"   _{ach['desc']}_\n\n"
-
-    await update.message.reply_text(
-        text, parse_mode="Markdown", reply_markup=main_menu_kb()
-    )
 
 
 async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -969,6 +975,12 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await q.answer()
     data    = q.data
     user_id = update.effective_user.id
+
+    # ── Onboarding navigatsiya ──
+    if data.startswith("onboard_"):
+        idx = int(data.split("_")[1]) - 1
+        await send_onboarding(user_id, idx, ctx.bot, message=q.message)
+        return
 
     if data.startswith("team:"):
         team_key = data.split(":")[1]
