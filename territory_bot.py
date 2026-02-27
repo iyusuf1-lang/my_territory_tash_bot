@@ -902,7 +902,16 @@ async def invasion_checker(app):
 
 def main():
     init_db()
-    app = Application.builder().token(BOT_TOKEN).build()
+
+    async def post_init(application: Application):
+        application.create_task(invasion_checker(application))
+
+    app = (
+        Application.builder()
+        .token(BOT_TOKEN)
+        .post_init(post_init)
+        .build()
+    )
 
     app.add_handler(CommandHandler("start",       cmd_start))
     app.add_handler(CommandHandler("help",        cmd_help))
@@ -916,11 +925,6 @@ def main():
     app.add_handler(CallbackQueryHandler(handle_callback))
 
     logger.info("🗺️ Territory Bot ishga tushdi!")
-
-    async def post_init(application):
-        asyncio.create_task(invasion_checker(application))
-
-    app.post_init = post_init
     app.run_polling(allowed_updates=["message", "callback_query"])
 
 
