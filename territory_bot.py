@@ -522,8 +522,8 @@ ONBOARDING_SLIDES = [
             "_4 / 4_"
         ),
         "buttons": [
-            [("🔴 Qizil", "team_red"),   ("🔵 Ko'k",   "team_blue")],
-            [("🟢 Yashil", "team_green"), ("🟡 Sariq",  "team_yellow")],
+            [("🔴 Qizil", "team:red"),   ("🔵 Ko'k",   "team:blue")],
+            [("🟢 Yashil", "team:green"), ("🟡 Sariq",  "team:yellow")],
         ],
     },
 ]
