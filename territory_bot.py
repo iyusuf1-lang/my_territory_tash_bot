@@ -373,7 +373,7 @@ def main_menu_kb() -> ReplyKeyboardMarkup:
 
 def trek_menu_kb() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup([
-        [KeyboardButton("📍 Joylashuvni yuborish", request_location=True)],
+        [KeyboardButton("📡 Live joylashuvni ulash", request_location=True)],
         [KeyboardButton("⏹ Trek tugatish")],
     ], resize_keyboard=True)
 
@@ -593,18 +593,48 @@ async def handle_location(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     lat  = update.message.location.latitude
     lng  = update.message.location.longitude
+    
+    # Live location yoki oddiy location — ikkalasini ham qabul qilamiz
+    is_live = update.message.location.live_period is not None
     mode = ctx.user_data.get("mode", MODE_IDLE)
 
-    # ── Trek rejimi ──
+    # ── Trek rejimi: live yoki oddiy location ──
     if mode == MODE_TREK:
         result = add_trek_point(user_id, lat, lng)
         if result:
             pts     = len(result["points"])
             dist_km = result["distance_m"] / 1000
-            msg     = f"📍 Nuqta #{pts} | 📏 {dist_km:.3f} km"
-            if result["is_closed"]:
-                msg += "\n\n✅ *Trek yopiq! ⏹ Trek tugatish tugmasini bosing.*"
-            await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+            
+            if is_live:
+                # Live location da faqat oxirgi xabarni yangilash (spam bo'lmasin)
+                last_msg_id = ctx.user_data.get("trek_status_msg_id")
+                status_text = (
+                    f"📡 *Trek yozilmoqda...*\n\n"
+                    f"📍 Nuqtalar: {pts}\n"
+                    f"📏 Masofa: {dist_km:.3f} km\n"
+                )
+                if result["is_closed"]:
+                    status_text += "\n✅ *Aylana yaratildi! Trek tugatish tugmasini bosing.*"
+                
+                try:
+                    if last_msg_id:
+                        await ctx.bot.edit_message_text(
+                            chat_id=update.effective_chat.id,
+                            message_id=last_msg_id,
+                            text=status_text,
+                            parse_mode=ParseMode.MARKDOWN,
+                        )
+                    else:
+                        sent = await update.message.reply_text(status_text, parse_mode=ParseMode.MARKDOWN)
+                        ctx.user_data["trek_status_msg_id"] = sent.message_id
+                except Exception:
+                    pass
+            else:
+                # Oddiy location — xabar yuborish
+                msg = f"📍 Nuqta #{pts} | 📏 {dist_km:.3f} km"
+                if result["is_closed"]:
+                    msg += "\n\n✅ *Trek yopiq! ⏹ Trek tugatish tugmasini bosing.*"
+                await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
         return
 
     # ── Doira markaz ──
@@ -670,9 +700,13 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             f"▶️ *Trek boshlandi!*\n\n"
             f"{team['emoji']} Jamoa: {team['name']}\n\n"
-            f"📍 Joylashuvingizni muntazam yuboring.\n"
-            f"Aylana yasab boshlang'ich nuqtaga qaytib keling.\n"
-            f"Keyin ⏹ *Trek tugatish* tugmasini bosing.",
+            f"📡 *Live joylashuvni ulang:*\n"
+            f"1. Quyidagi tugmani bosing\n"
+            f"2. *'Live joylashuvni ulash'* tugmasini bosing\n"
+            f"3. Vaqtni tanlang (15 daqiqa yoki 1 soat)\n"
+            f"4. Aylana yasab boshlang'ich nuqtaga qaytib keling\n"
+            f"5. ⏹ *Trek tugatish* bosing\n\n"
+            f"_Live location ulanganda bot avtomatik trek yozadi!_",
             parse_mode=ParseMode.MARKDOWN,
             reply_markup=trek_menu_kb(),
         )
@@ -700,6 +734,7 @@ async def handle_finish_trek(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     db_user = get_user(user_id)
     ctx.user_data["mode"] = MODE_IDLE
+    ctx.user_data.pop("trek_status_msg_id", None)
 
     result = finish_trek(user_id)
     if not result or len(result["points"]) < 5:
@@ -900,6 +935,54 @@ async def invasion_checker(app):
 # MAIN
 # ══════════════════════════════════════════════════════
 
+
+async def handle_live_location(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Live location yangilanganda chaqiriladi (edited_message)"""
+    user_id = update.effective_user.id
+    db_user = get_user(user_id)
+    if not db_user or not db_user["team"]:
+        return
+
+    mode = ctx.user_data.get("mode", MODE_IDLE)
+    if mode != MODE_TREK:
+        return
+
+    msg = update.edited_message
+    if not msg or not msg.location:
+        return
+
+    lat = msg.location.latitude
+    lng = msg.location.longitude
+
+    result = add_trek_point(user_id, lat, lng)
+    if not result:
+        return
+
+    pts     = len(result["points"])
+    dist_km = result["distance_m"] / 1000
+    status_text = (
+        f"📡 *Trek yozilmoqda...*\n\n"
+        f"📍 Nuqtalar: {pts}\n"
+        f"📏 Masofa: {dist_km:.3f} km\n"
+    )
+    if result["is_closed"]:
+        status_text += "\n✅ *Aylana yaratildi! ⏹ Trek tugatish tugmasini bosing.*"
+
+    last_msg_id = ctx.user_data.get("trek_status_msg_id")
+    try:
+        if last_msg_id:
+            await ctx.bot.edit_message_text(
+                chat_id=update.effective_chat.id,
+                message_id=last_msg_id,
+                text=status_text,
+                parse_mode=ParseMode.MARKDOWN,
+            )
+        else:
+            sent = await msg.reply_text(status_text, parse_mode=ParseMode.MARKDOWN)
+            ctx.user_data["trek_status_msg_id"] = sent.message_id
+    except Exception:
+        pass
+
 async def on_startup(app: Application) -> None:
     asyncio.create_task(invasion_checker(app))
 
@@ -922,11 +1005,12 @@ def main():
     app.add_handler(CommandHandler("zones",       cmd_zones))
     app.add_handler(CommandHandler("history",     cmd_history))
     app.add_handler(MessageHandler(filters.LOCATION,                handle_location))
+    app.add_handler(MessageHandler(filters.UpdateType.EDITED & filters.LOCATION, handle_live_location))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(CallbackQueryHandler(handle_callback))
 
     logger.info("🗺️ Territory Bot ishga tushdi!")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 
 if __name__ == "__main__":
