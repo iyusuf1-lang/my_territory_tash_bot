@@ -752,7 +752,8 @@ async def handle_finish_trek(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             msg += f"\n⚔️ *{len(captured)} zona egallandi!*\n"
             for c in captured:
                 te = TEAMS.get(c["team"], {"emoji": "❓"})["emoji"]
-                msg += f"  {te} {c['name'] or f'#{c[\"id\"]}'}\n"
+                zone_label = c["name"] or f"#{c['id']}"
+                msg += f"  {te} {zone_label}\n"
     else:
         d_close = haversine(points[0]["lat"], points[0]["lng"], points[-1]["lat"], points[-1]["lng"])
         msg += (
