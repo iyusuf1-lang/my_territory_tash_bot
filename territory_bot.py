@@ -544,6 +544,27 @@ async def send_onboarding(chat_id, slide_idx, bot, message=None):
     await bot.send_message(chat_id, slide["text"], parse_mode="Markdown", reply_markup=kb)
 
 
+async def send_onboarding_miniapp(chat_id: int, bot):
+    """Mini App orqali onboarding yuborish"""
+    mini_app_url = os.getenv("MINI_APP_URL", "https://iyusuf1-lang.github.io/my_territory_tash_bot/")
+    onboarding_url = mini_app_url.rstrip("/") + "/onboarding.html"
+    
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton(
+            "🚀 O'yinni boshlash",
+            web_app={"url": onboarding_url}
+        )
+    ]])
+    await bot.send_message(
+        chat_id,
+        "🎯 *TERRITORY TASHKENT*\n\n"
+        "Toshkentdagi hududiy o'yinga xush kelibsiz!\n\n"
+        "👇 Quyidagi tugmani bosib o'yin haqida bilib oling:",
+        parse_mode="Markdown",
+        reply_markup=kb,
+    )
+
+
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     upsert_user(user.id, user.username or "", user.first_name or "")
@@ -570,8 +591,8 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             pass
 
     if not db_user or not db_user["team"]:
-        # Yangi foydalanuvchi — onboarding
-        await send_onboarding(user.id, 0, ctx.bot)
+        # Yangi foydalanuvchi — Mini App onboarding
+        await send_onboarding_miniapp(user.id, ctx.bot)
     else:
         team = TEAMS[db_user["team"]]
         await update.message.reply_text(
@@ -1032,7 +1053,7 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     data    = q.data
     user_id = update.effective_user.id
 
-    # ── Onboarding navigatsiya ──
+    # ── Onboarding navigatsiya (eski matn slaydlar) ──
     if data.startswith("onboard_"):
         idx = int(data.split("_")[1]) - 1
         await send_onboarding(user_id, idx, ctx.bot, message=q.message)
@@ -1541,6 +1562,38 @@ async def start_web_server():
     while True:
         await asyncio.sleep(3600)
 
+async def handle_webapp_data(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Mini App dan kelgan ma'lumotlarni qabul qilish"""
+    user_id = update.effective_user.id
+    try:
+        data = json.loads(update.message.web_app_data.data)
+    except Exception:
+        return
+
+    action = data.get("action")
+
+    if action == "onboarding_done":
+        # Onboarding tugadi — jamoa tanlash
+        upsert_user(user_id, update.effective_user.username or "", update.effective_user.first_name or "")
+        db_user = get_user(user_id)
+        if not db_user or not db_user["team"]:
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔴 Qizil", callback_data="team:red"),
+                 InlineKeyboardButton("🔵 Ko'k",  callback_data="team:blue")],
+                [InlineKeyboardButton("🟢 Yashil", callback_data="team:green"),
+                 InlineKeyboardButton("🟡 Sariq",  callback_data="team:yellow")],
+            ])
+            await update.message.reply_text(
+                "🎽 *Jamoangizni tanlang:*\n\n"
+                "🔴 *Qizil* — Jangovar\n"
+                "🔵 *Ko'k* — Strategik\n"
+                "🟢 *Yashil* — Kengayuvchi\n"
+                "🟡 *Sariq* — Tezkor",
+                parse_mode="Markdown",
+                reply_markup=kb,
+            )
+
+
 async def handle_live_location(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Live location yangilanganda chaqiriladi (edited_message)"""
     user_id = update.effective_user.id
@@ -1616,6 +1669,7 @@ def main():
     app.add_handler(CommandHandler("referral",    cmd_referral))
     app.add_handler(MessageHandler(filters.LOCATION,                handle_location))
     app.add_handler(MessageHandler(filters.UpdateType.EDITED & filters.LOCATION, handle_live_location))
+    app.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, handle_webapp_data))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(CallbackQueryHandler(handle_callback))
 
