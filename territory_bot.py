@@ -548,20 +548,32 @@ async def send_onboarding_miniapp(chat_id: int, bot):
     """Mini App orqali onboarding yuborish"""
     mini_app_url = os.getenv("MINI_APP_URL", "https://iyusuf1-lang.github.io/my_territory_tash_bot/")
     onboarding_url = mini_app_url.rstrip("/") + "/onboarding.html"
-    
-    kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton(
-            "🚀 O'yinni boshlash",
-            web_app={"url": onboarding_url}
-        )
+
+    # 1. Avval Mini App tugmasi
+    kb_miniapp = InlineKeyboardMarkup([[
+        InlineKeyboardButton("🚀 O'yin haqida ko'proq", web_app={"url": onboarding_url})
     ]])
     await bot.send_message(
         chat_id,
         "🎯 *TERRITORY TASHKENT*\n\n"
         "Toshkentdagi hududiy o'yinga xush kelibsiz!\n\n"
-        "👇 Quyidagi tugmani bosib o'yin haqida bilib oling:",
+        "👇 O'yin haqida bilib oling:",
         parse_mode="Markdown",
-        reply_markup=kb,
+        reply_markup=kb_miniapp,
+    )
+
+    # 2. Keyin jamoa tanlash
+    kb_team = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔴 Qizil", callback_data="team:red"),
+         InlineKeyboardButton("🔵 Ko'k",  callback_data="team:blue")],
+        [InlineKeyboardButton("🟢 Yashil", callback_data="team:green"),
+         InlineKeyboardButton("🟡 Sariq",  callback_data="team:yellow")],
+    ])
+    await bot.send_message(
+        chat_id,
+        "🎽 *Jamoangizni tanlang va boshlang:*",
+        parse_mode="Markdown",
+        reply_markup=kb_team,
     )
 
 
