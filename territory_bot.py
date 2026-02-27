@@ -17,8 +17,11 @@ import logging
 import os
 import json
 import math
+import hmac
+import hashlib
 from datetime import datetime, timedelta
 from contextlib import contextmanager
+from aiohttp import web
 
 import sqlite3
 from telegram import (
@@ -376,9 +379,10 @@ def main_menu_kb() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup([
         [KeyboardButton("📍 Joylashuvni yuborish", request_location=True)],
         [KeyboardButton("▶️ Trek boshlash"), KeyboardButton("⏹ Trek tugatish")],
-        [KeyboardButton("🗺 Zonalarim"),     KeyboardButton("📊 Statistika")],
-        [KeyboardButton("🏆 Reyting"),       KeyboardButton("🏅 Yutuqlar")],
-        [KeyboardButton("👥 Referral"),       KeyboardButton("❓ Yordam")],
+        [KeyboardButton("🗺 Zonalarim"),     KeyboardButton("🌍 Xarita")],
+        [KeyboardButton("📊 Statistika"),    KeyboardButton("🏆 Reyting")],
+        [KeyboardButton("🏅 Yutuqlar"),      KeyboardButton("👥 Referral")],
+        [KeyboardButton("❓ Yordam")],
     ], resize_keyboard=True)
 
 
@@ -467,6 +471,23 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"👋 Qaytib keldingiz!\n{team['emoji']} Jamoa: {team['name']}",
             reply_markup=main_menu_kb(),
         )
+
+
+async def cmd_map(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Mini App xaritasini ochish"""
+    mini_app_url = os.getenv("MINI_APP_URL", "https://YOUR_GITHUB_USERNAME.github.io/my_territory_tash_bot/")
+    
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton(
+            "🌍 Xaritani ochish",
+            web_app={"url": mini_app_url}
+        )]
+    ])
+    await update.message.reply_text(
+        "🌍 *Territory Xaritasi*\n\nBarcha zonalarni xaritada ko'ring!",
+        parse_mode="Markdown",
+        reply_markup=keyboard,
+    )
 
 
 async def cmd_referral(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -799,6 +820,9 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     elif text == "🏆 Reyting":
         await cmd_leaderboard(update, ctx)
+
+    elif text == "🌍 Xarita":
+        await cmd_map(update, ctx)
 
     elif text == "🏅 Yutuqlar":
         await cmd_achievements(update, ctx)
@@ -1204,6 +1228,199 @@ async def expire_old_zones(app):
 
         await asyncio.sleep(3600)  # Har 1 soatda tekshirish
 
+
+# ══════════════════════════════════════════════════════
+# MINI APP API SERVER
+# ══════════════════════════════════════════════════════
+
+MINI_APP_PORT = int(os.getenv("PORT", "8080"))
+BOT_TOKEN_FOR_VERIFY = os.getenv("BOT_TOKEN", "")
+
+
+def verify_telegram_webapp(init_data: str) -> bool:
+    """Telegram WebApp ma'lumotlarini tekshirish"""
+    try:
+        parsed = {}
+        for item in init_data.split("&"):
+            if "=" in item:
+                k, v = item.split("=", 1)
+                parsed[k] = v
+        
+        received_hash = parsed.pop("hash", "")
+        data_check = "\n".join(f"{k}={v}" for k, v in sorted(parsed.items()))
+        secret_key = hmac.new(b"WebAppData", BOT_TOKEN_FOR_VERIFY.encode(), hashlib.sha256).digest()
+        calc_hash = hmac.new(secret_key, data_check.encode(), hashlib.sha256).hexdigest()
+        return hmac.compare_digest(calc_hash, received_hash)
+    except Exception:
+        return True  # Dev mode da skip
+
+
+async def api_zones(request: web.Request) -> web.Response:
+    """Barcha zonalarni JSON qaytarish"""
+    try:
+        zones = get_all_zones()
+        result = []
+        for z in zones:
+            owner = get_user(z["owner_id"]) if z["owner_id"] else None
+            team_info = TEAMS.get(z["team"], {"emoji": "❓", "name": "Neytral"})
+            
+            geom = json.loads(z["geometry"])
+            result.append({
+                "id": z["id"],
+                "type": z["zone_type"],
+                "team": z["team"],
+                "team_name": team_info["name"],
+                "team_emoji": team_info["emoji"],
+                "owner_name": owner["first_name"] if owner else "Neytral",
+                "center_lat": z["center_lat"],
+                "center_lng": z["center_lng"],
+                "radius_m": z.get("radius_m"),
+                "geometry": geom,
+                "area_m2": z["area_m2"],
+                "created_at": z["created_at"],
+            })
+        
+        return web.Response(
+            text=json.dumps(result, ensure_ascii=False),
+            content_type="application/json",
+            headers={"Access-Control-Allow-Origin": "*"},
+        )
+    except Exception as e:
+        return web.Response(text=json.dumps({"error": str(e)}), status=500)
+
+
+async def api_user(request: web.Request) -> web.Response:
+    """Foydalanuvchi ma'lumotlari"""
+    try:
+        user_id = int(request.rel_url.query.get("user_id", 0))
+        if not user_id:
+            return web.Response(text=json.dumps({"error": "user_id required"}), status=400)
+        
+        db_user = get_user(user_id)
+        if not db_user:
+            return web.Response(text=json.dumps({"error": "not found"}), status=404)
+        
+        zones = get_user_zones(user_id)
+        team_info = TEAMS.get(db_user["team"], {"emoji": "❓", "name": "Yo'q"})
+        
+        result = {
+            "user_id": user_id,
+            "first_name": db_user["first_name"],
+            "team": db_user["team"],
+            "team_name": team_info["name"],
+            "team_emoji": team_info["emoji"],
+            "zones_owned": db_user["zones_owned"],
+            "total_km": db_user["total_km"],
+            "zones": [{
+                "id": z["id"],
+                "type": z["zone_type"],
+                "center_lat": z["center_lat"],
+                "center_lng": z["center_lng"],
+                "radius_m": z.get("radius_m"),
+                "geometry": json.loads(z["geometry"]),
+                "area_m2": z["area_m2"],
+            } for z in zones],
+        }
+        
+        return web.Response(
+            text=json.dumps(result, ensure_ascii=False),
+            content_type="application/json",
+            headers={"Access-Control-Allow-Origin": "*"},
+        )
+    except Exception as e:
+        return web.Response(text=json.dumps({"error": str(e)}), status=500)
+
+
+async def api_active_treks(request: web.Request) -> web.Response:
+    """Faol treklar (yurgan yo'llar) ni qaytarish"""
+    try:
+        with get_db() as conn:
+            treks = conn.execute("""
+                SELECT t.*, u.first_name, u.team
+                FROM treks t JOIN users u ON t.user_id=u.user_id
+                WHERE t.status='active'
+            """).fetchall()
+        result = []
+        for t in treks:
+            t = dict(t)
+            points = json.loads(t["points"])
+            if len(points) < 2:
+                continue
+            team_info = TEAMS.get(t["team"], {"emoji":"❓"})
+            result.append({
+                "user_id":    t["user_id"],
+                "owner_name": t["first_name"],
+                "team":       t["team"],
+                "team_emoji": team_info["emoji"],
+                "points":     points[-50:],  # Oxirgi 50 nuqta
+                "distance_m": t["distance_m"],
+            })
+        return web.Response(
+            text=json.dumps(result, ensure_ascii=False),
+            content_type="application/json",
+            headers={"Access-Control-Allow-Origin": "*"},
+        )
+    except Exception as e:
+        return web.Response(text=json.dumps({"error": str(e)}), status=500)
+
+
+async def api_active_players(request: web.Request) -> web.Response:
+    """Faol o'yinchilar (oxirgi trek nuqtasi bo'yicha)"""
+    try:
+        with get_db() as conn:
+            treks = conn.execute("""
+                SELECT t.user_id, t.points, u.first_name, u.team
+                FROM treks t JOIN users u ON t.user_id=u.user_id
+                WHERE t.status='active'
+            """).fetchall()
+        result = []
+        for t in treks:
+            t = dict(t)
+            points = json.loads(t["points"])
+            if not points:
+                continue
+            last = points[-1]
+            team_info = TEAMS.get(t["team"], {"emoji":"❓","name":"?"})
+            result.append({
+                "user_id":    t["user_id"],
+                "name":       t["first_name"],
+                "team":       t["team"],
+                "team_emoji": team_info["emoji"],
+                "lat":        last["lat"],
+                "lng":        last["lng"],
+            })
+        return web.Response(
+            text=json.dumps(result, ensure_ascii=False),
+            content_type="application/json",
+            headers={"Access-Control-Allow-Origin": "*"},
+        )
+    except Exception as e:
+        return web.Response(text=json.dumps({"error": str(e)}), status=500)
+
+
+async def api_health(request: web.Request) -> web.Response:
+    return web.Response(text="OK")
+
+
+async def start_web_server():
+    """API serverni ishga tushirish"""
+    app_web = web.Application()
+    app_web.router.add_get("/api/zones",          api_zones)
+    app_web.router.add_get("/api/user",           api_user)
+    app_web.router.add_get("/api/active_treks",   api_active_treks)
+    app_web.router.add_get("/api/active_players", api_active_players)
+    app_web.router.add_get("/health",             api_health)
+    
+    runner = web.AppRunner(app_web)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", MINI_APP_PORT)
+    await site.start()
+    logger.info(f"🌐 API server started on port {MINI_APP_PORT}")
+    
+    # Server abadiy ishlaydi
+    while True:
+        await asyncio.sleep(3600)
+
 async def handle_live_location(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Live location yangilanganda chaqiriladi (edited_message)"""
     user_id = update.effective_user.id
@@ -1254,6 +1471,7 @@ async def handle_live_location(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def on_startup(app: Application) -> None:
     asyncio.create_task(invasion_checker(app))
     asyncio.create_task(expire_old_zones(app))
+    asyncio.create_task(start_web_server())
 
 
 def main():
@@ -1273,6 +1491,7 @@ def main():
     app.add_handler(CommandHandler("leaderboard", cmd_leaderboard))
     app.add_handler(CommandHandler("zones",       cmd_zones))
     app.add_handler(CommandHandler("history",     cmd_history))
+    app.add_handler(CommandHandler("map",          cmd_map))
     app.add_handler(CommandHandler("achievements", cmd_achievements))
     app.add_handler(CommandHandler("referral",    cmd_referral))
     app.add_handler(MessageHandler(filters.LOCATION,                handle_location))
