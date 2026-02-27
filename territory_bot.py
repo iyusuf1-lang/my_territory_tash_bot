@@ -585,6 +585,62 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
 
 
+async def cmd_map(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    mini_app_url = os.getenv("MINI_APP_URL", "https://iyusuf1-lang.github.io/my_territory_tash_bot/")
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("🌍 Xaritani ochish", web_app={"url": mini_app_url})
+    ]])
+    await update.message.reply_text(
+        "🌍 *Territory Xaritasi*\n\nBarcha zonalarni real-time ko'ring!",
+        parse_mode="Markdown",
+        reply_markup=keyboard,
+    )
+
+
+async def cmd_achievements(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    earned = get_user_achievements(user_id)
+    earned_codes = {a["code"] for a in earned}
+
+    text = "🏅 *Yutuqlar*\n\n"
+    text += f"✅ Qozonilgan: {len(earned)}/{len(ACHIEVEMENTS)}\n\n"
+
+    for code, ach in ACHIEVEMENTS.items():
+        if code in earned_codes:
+            text += f"✅ {ach['name']}\n"
+        else:
+            text += f"🔒 {ach['name']}\n"
+        text += f"   _{ach['desc']}_\n\n"
+
+    await update.message.reply_text(
+        text, parse_mode="Markdown", reply_markup=main_menu_kb()
+    )
+
+
+async def cmd_referral(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    db_user = get_user(user_id)
+    if not db_user:
+        await update.message.reply_text("Avval /start bosing!")
+        return
+
+    bot_info = await ctx.bot.get_me()
+    link = get_referral_link(user_id, bot_info.username)
+    ref_count = db_user.get("referral_count", 0)
+
+    await update.message.reply_text(
+        f"👥 *Referral tizimi*\n\n"
+        f"Do'stlaringizni taklif qiling!\n\n"
+        f"🔗 Sizning havola:\n`{link}`\n\n"
+        f"👤 Taklif qilganlar: *{ref_count}* ta\n\n"
+        f"🏅 *Mukofotlar:*\n"
+        f"• 1 ta → 👥 Do'st taklif qildi\n"
+        f"• 5 ta → 👨‍👩‍👧‍👦 Jamoa quruvchi",
+        parse_mode="Markdown",
+        reply_markup=main_menu_kb(),
+    )
+
+
 async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "❓ *Qo'llanma*\n\n"
