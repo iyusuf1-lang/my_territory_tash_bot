@@ -467,8 +467,14 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
     else:
         team = TEAMS[db_user["team"]]
+        # Faqat birinchi marta yoki /start so'ralganda menyu ko'rsatish
         await update.message.reply_text(
-            f"👋 Qaytib keldingiz!\n{team['emoji']} Jamoa: {team['name']}",
+            f"👋 *Xush kelibsiz, {db_user['first_name']}!*\n"
+            f"{team['emoji']} Jamoa: {team['name']}\n\n"
+            f"🗺 Zonalar: *{db_user['zones_owned']}* ta\n"
+            f"🏃 Masofa: *{db_user['total_km']:.1f}* km\n"
+            f"⚔️ Egallangan: *{db_user['zones_taken']}* ta",
+            parse_mode=ParseMode.MARKDOWN,
             reply_markup=main_menu_kb(),
         )
 
@@ -752,7 +758,7 @@ async def handle_location(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     nearby = get_zones_near(lat, lng, 500)
     team   = TEAMS[db_user["team"]]
 
-    msg = f"📍 Joylashuv qabul qilindi.\n{team['emoji']} Jamoa: {team['name']}\n"
+    msg = f"📍 *Joylashuv qabul qilindi*\n{team['emoji']} {team['name']}\n"
     if nearby:
         msg += f"\n🔍 *500m ichida {len(nearby)} zona:*\n"
         for z in nearby[:5]:
@@ -766,9 +772,12 @@ async def handle_location(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             tp = "⭕" if z["zone_type"] == "circle" else "🔷"
             nm_z = z["name"] or f"#{z['id']}"
             msg += f"  {tp} {nm_z} — {owner_txt} ({z['distance']:.0f}m)\n"
+    else:
+        msg += "\n🔍 Yaqin atrofda zona yo'q."
 
+    msg += "\n\nZona yaratish uchun tugmalardan foydalaning:"
     await update.message.reply_text(
-        msg + "\nNima qilmoqchisiz?",
+        msg,
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=zone_create_kb(),
     )
@@ -795,19 +804,17 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         ctx.user_data["mode"] = MODE_TREK
         start_trek(user_id)
         team = TEAMS[db_user["team"]]
-        await update.message.reply_text(
+        sent = await update.message.reply_text(
             f"▶️ *Trek boshlandi!*\n\n"
             f"{team['emoji']} Jamoa: {team['name']}\n\n"
-            f"📡 *Live joylashuvni ulang:*\n"
-            f"1. Quyidagi tugmani bosing\n"
-            f"2. *'Live joylashuvni ulash'* tugmasini bosing\n"
-            f"3. Vaqtni tanlang (15 daqiqa yoki 1 soat)\n"
-            f"4. Aylana yasab boshlang'ich nuqtaga qaytib keling\n"
-            f"5. ⏹ *Trek tugatish* bosing\n\n"
-            f"_Live location ulanganda bot avtomatik trek yozadi!_",
+            f"📡 *Quyidagi tugmani bosing → Live joylashuvni tanlang*\n"
+            f"_(15 daqiqa yoki 1 soat)_\n\n"
+            f"Aylana yasab boshlang'ich nuqtaga qaytib keling.\n"
+            f"Keyin ⏹ *Trek tugatish* bosing.",
             parse_mode=ParseMode.MARKDOWN,
             reply_markup=trek_menu_kb(),
         )
+        ctx.user_data["trek_start_msg"] = sent.message_id
 
     elif text == "⏹ Trek tugatish":
         await handle_finish_trek(update, ctx)
@@ -834,7 +841,11 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await cmd_help(update, ctx)
 
     else:
-        await update.message.reply_text("❓ Tushunmadim.", reply_markup=main_menu_kb())
+        # Noma'lum xabar — menyu ko'rsatmasdan javob berish
+        await update.message.reply_text(
+            "❓ Tushunmadim. Quyidagi tugmalardan foydalaning.",
+            reply_markup=main_menu_kb(),
+        )
 
 
 async def handle_finish_trek(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
