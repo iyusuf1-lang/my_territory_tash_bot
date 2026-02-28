@@ -1,15 +1,12 @@
 #!/usr/bin/env python3
 """
-🗺️ Toshkent Territory Bot
-━━━━━━━━━━━━━━━━━━━━━━━━━━
-Yuguruvchilar uchun hududiy o'yin:
-  ✅ GPS trek yozish (yurgan yo'l)
-  ✅ Doira zona yaratish (markaz + radius)
-  ✅ Zona egallash (dushman zonasini aylanib o'tish)
-  ✅ Jamoa o'yini (qizil vs ko'k vs yashil vs sariq)
-  ✅ Bildirishnomalar (zonangizga tajovuz)
-  ✅ Reyting va statistika
-  ✅ Zona tarixi
+🗺️ Toshkent Territory Bot — FIXED
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TUZATILGAN MUAMMOLAR:
+  ✅ Live location filter to'g'rilandi
+  ✅ Live location vaqtini user kiritadi
+  ✅ Trek boshlanganda live location tugmasi chiqadi
+  ✅ Trek real-time xaritada ko'rinadi
 """
 
 import asyncio
@@ -34,7 +31,6 @@ from telegram.ext import (
 )
 from telegram.constants import ParseMode
 
-# ══════════════════════════════════════════════════════
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     level=logging.INFO,
@@ -44,7 +40,6 @@ logger = logging.getLogger(__name__)
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8664008696:AAEy6cuhP0yKKQu1Tp-IEm9FwTWCVRCrYOg")
 DB_PATH   = os.getenv("DB_PATH", "territory.db")
 
-# Jamoalar
 TEAMS = {
     "red":    {"name": "🔴 Qizil",   "emoji": "🔴"},
     "blue":   {"name": "🔵 Ko'k",    "emoji": "🔵"},
@@ -52,12 +47,10 @@ TEAMS = {
     "yellow": {"name": "🟡 Sariq",   "emoji": "🟡"},
 }
 
-# Rejimlar
 MODE_IDLE   = "idle"
 MODE_TREK   = "trek"
 MODE_CIRCLE = "circle"
 
-# Spam oldini olish
 notif_cache: dict = {}
 
 # ══════════════════════════════════════════════════════
@@ -85,8 +78,8 @@ def init_db():
             owner_id    INTEGER NOT NULL,
             team        TEXT NOT NULL,
             name        TEXT,
-            zone_type   TEXT NOT NULL,   -- 'circle' | 'polygon'
-            geometry    TEXT NOT NULL,   -- JSON
+            zone_type   TEXT NOT NULL,
+            geometry    TEXT NOT NULL,
             center_lat  REAL NOT NULL,
             center_lng  REAL NOT NULL,
             radius_m    REAL,
@@ -104,7 +97,7 @@ def init_db():
             from_team   TEXT,
             to_user     INTEGER NOT NULL,
             to_team     TEXT NOT NULL,
-            action      TEXT NOT NULL,   -- 'created' | 'captured'
+            action      TEXT NOT NULL,
             captured_at TEXT DEFAULT (datetime('now'))
         );
 
@@ -180,7 +173,6 @@ def haversine(lat1, lon1, lat2, lon2) -> float:
 
 
 def point_in_polygon(lat, lng, polygon: list) -> bool:
-    """Ray casting algoritmi"""
     n = len(polygon)
     inside = False
     px, py = lng, lat
@@ -236,7 +228,6 @@ def polygon_area_m2(points: list) -> float:
 
 
 def zone_is_captured_by_trek(trek_points: list, zone: dict) -> bool:
-    """Zona markazi trek polygon ichida bo'lsa — egallangan"""
     clat = zone["center_lat"]
     clng = zone["center_lng"]
     return point_in_polygon(clat, clng, trek_points)
@@ -333,7 +324,6 @@ def get_user_zones(user_id) -> list:
 
 
 async def get_user_photo_url(bot, user_id: int) -> str | None:
-    """Foydalanuvchi Telegram profil rasmini URL sifatida olish"""
     try:
         photos = await bot.get_user_profile_photos(user_id, limit=1)
         if photos.total_count == 0:
@@ -348,10 +338,7 @@ async def get_user_photo_url(bot, user_id: int) -> str | None:
 
 def update_zone_photo(zone_id: int, photo_url: str):
     with get_db() as conn:
-        conn.execute(
-            "UPDATE zones SET photo_url=? WHERE id=?",
-            (photo_url, zone_id)
-        )
+        conn.execute("UPDATE zones SET photo_url=? WHERE id=?", (photo_url, zone_id))
 
 
 def get_zone_history(zone_id) -> list:
@@ -385,6 +372,15 @@ def add_trek_point(user_id, lat, lng) -> dict | None:
             return None
         trek = dict(trek)
         points = json.loads(trek["points"])
+
+        # 🔧 FIX: Minimal masofa tekshiruvi (10m dan kam bo'lsa qo'shma)
+        if points:
+            last = points[-1]
+            dist_from_last = haversine(last["lat"], last["lng"], lat, lng)
+            if dist_from_last < 10:
+                return {"trek_id": trek["id"], "points": points,
+                        "distance_m": trek["distance_m"], "is_closed": trek_is_closed(points)}
+
         points.append({"lat": lat, "lng": lng, "time": datetime.now().isoformat()})
         dist = calc_trek_distance(points)
         conn.execute("UPDATE treks SET points=?, distance_m=? WHERE id=?",
@@ -426,6 +422,10 @@ def main_menu_kb() -> ReplyKeyboardMarkup:
 
 
 def trek_menu_kb() -> ReplyKeyboardMarkup:
+    """
+    Trek rejimida faqat Live Location tugmasi va tugatish.
+    Bu keyboard ko'rsatilganda user Live Location ni bosadi.
+    """
     return ReplyKeyboardMarkup([
         [KeyboardButton("📡 Live joylashuvni ulash", request_location=True)],
         [KeyboardButton("⏹ Trek tugatish")],
@@ -443,9 +443,9 @@ def team_kb() -> InlineKeyboardMarkup:
 
 def zone_create_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("⭕ Doira zona yaratish",     callback_data="zone:circle")],
+        [InlineKeyboardButton("⭕ Doira zona yaratish",       callback_data="zone:circle")],
         [InlineKeyboardButton("🔷 Trek orqali zona yaratish", callback_data="zone:trek")],
-        [InlineKeyboardButton("❌ Bekor",                   callback_data="zone:cancel")],
+        [InlineKeyboardButton("❌ Bekor",                     callback_data="zone:cancel")],
     ])
 
 
@@ -462,94 +462,13 @@ def radius_kb() -> InlineKeyboardMarkup:
 
 
 # ══════════════════════════════════════════════════════
-# HANDLERS
+# ONBOARDING
 # ══════════════════════════════════════════════════════
 
-# ── Onboarding slaydlari ──
-ONBOARDING_SLIDES = [
-    {
-        "text": (
-            "🎯 *TERRITORY TASHKENT*\n"
-            "━━━━━━━━━━━━━━━━━━\n\n"
-            "Toshkentdagi hududiy o'yinga xush kelibsiz!\n\n"
-            "📍 *GPS* bilan yuring\n"
-            "🏴 *Hudud* egallang\n"
-            "⚔️ *Raqiblar* bilan kurashing\n"
-            "🏆 *Lider* bo'ling!\n\n"
-            "_1 / 4_ →"
-        ),
-        "buttons": [[("Keyingisi →", "onboard_2")]],
-    },
-    {
-        "text": (
-            "🏃 *TREK YOZING*\n"
-            "━━━━━━━━━━━━━━━━━━\n\n"
-            "1️⃣ *Trek boshlash* tugmasini bosing\n"
-            "2️⃣ *Live joylashuvni ulang* (15 daqiqa)\n"
-            "3️⃣ Aylana yasab yuring 🗺\n"
-            "4️⃣ Boshlang'ich nuqtaga qaytib keling\n"
-            "5️⃣ *Trek tugatish* → Zona yaratiladi! ✅\n\n"
-            "📐 *Minimal masofa:* ~100 metr\n\n"
-            "_2 / 4_ →"
-        ),
-        "buttons": [[("← Orqaga", "onboard_1"), ("Keyingisi →", "onboard_3")]],
-    },
-    {
-        "text": (
-            "⚔️ *HUJUM QILING*\n"
-            "━━━━━━━━━━━━━━━━━━\n\n"
-            "Dushman zonasini *egallash* uchun:\n\n"
-            "1️⃣ Dushman zonasini toping\n"
-            "2️⃣ Trek boshlang\n"
-            "3️⃣ Zona atrofini *aylanib chiqing* 🔄\n"
-            "4️⃣ Trek tugating → Zona *SIZNIKI!* 🏴\n\n"
-            "🔔 Egasi darhol *xabar* oladi!\n"
-            "⏱ Zona *7 kun* egasiz qolsa neytral bo'ladi\n\n"
-            "_3 / 4_ →"
-        ),
-        "buttons": [[("← Orqaga", "onboard_2"), ("Keyingisi →", "onboard_4")]],
-    },
-    {
-        "text": (
-            "🎽 *JAMOA TANLANG*\n"
-            "━━━━━━━━━━━━━━━━━━\n\n"
-            "🔴 *Qizil* — Jangovar\n"
-            "🔵 *Ko'k* — Strategik\n"
-            "🟢 *Yashil* — Kengayuvchi\n"
-            "🟡 *Sariq* — Tezkor\n\n"
-            "🏆 *Eng ko'p hudud* egallagan jamoa yutadi!\n\n"
-            "👇 *Jamoangizni tanlang:*\n\n"
-            "_4 / 4_"
-        ),
-        "buttons": [
-            [("🔴 Qizil", "team:red"),   ("🔵 Ko'k",   "team:blue")],
-            [("🟢 Yashil", "team:green"), ("🟡 Sariq",  "team:yellow")],
-        ],
-    },
-]
-
-
-async def send_onboarding(chat_id, slide_idx, bot, message=None):
-    slide = ONBOARDING_SLIDES[slide_idx]
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton(t, callback_data=cd) for t, cd in row]
-        for row in slide["buttons"]
-    ])
-    if message:
-        try:
-            await message.edit_text(slide["text"], parse_mode="Markdown", reply_markup=kb)
-            return
-        except Exception:
-            pass
-    await bot.send_message(chat_id, slide["text"], parse_mode="Markdown", reply_markup=kb)
-
-
 async def send_onboarding_miniapp(chat_id: int, bot):
-    """Mini App orqali onboarding yuborish"""
     mini_app_url = os.getenv("MINI_APP_URL", "https://iyusuf1-lang.github.io/my_territory_tash_bot/")
     onboarding_url = mini_app_url.rstrip("/") + "/onboarding.html"
 
-    # 1. Avval Mini App tugmasi
     kb_miniapp = InlineKeyboardMarkup([[
         InlineKeyboardButton("🚀 O'yin haqida ko'proq", web_app={"url": onboarding_url})
     ]])
@@ -562,7 +481,6 @@ async def send_onboarding_miniapp(chat_id: int, bot):
         reply_markup=kb_miniapp,
     )
 
-    # 2. Keyin jamoa tanlash
     kb_team = InlineKeyboardMarkup([
         [InlineKeyboardButton("🔴 Qizil", callback_data="team:red"),
          InlineKeyboardButton("🔵 Ko'k",  callback_data="team:blue")],
@@ -577,12 +495,15 @@ async def send_onboarding_miniapp(chat_id: int, bot):
     )
 
 
+# ══════════════════════════════════════════════════════
+# COMMAND HANDLERS
+# ══════════════════════════════════════════════════════
+
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     upsert_user(user.id, user.username or "", user.first_name or "")
     db_user = get_user(user.id)
 
-    # Referral tekshirish
     args = ctx.args
     if args and args[0].startswith("ref_"):
         try:
@@ -603,7 +524,6 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             pass
 
     if not db_user or not db_user["team"]:
-        # Yangi foydalanuvchi — Mini App onboarding
         await send_onboarding_miniapp(user.id, ctx.bot)
     else:
         team = TEAMS[db_user["team"]]
@@ -630,67 +550,23 @@ async def cmd_map(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
 
 
-async def cmd_achievements(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    earned = get_user_achievements(user_id)
-    earned_codes = {a["code"] for a in earned}
-
-    text = "🏅 *Yutuqlar*\n\n"
-    text += f"✅ Qozonilgan: {len(earned)}/{len(ACHIEVEMENTS)}\n\n"
-
-    for code, ach in ACHIEVEMENTS.items():
-        if code in earned_codes:
-            text += f"✅ {ach['name']}\n"
-        else:
-            text += f"🔒 {ach['name']}\n"
-        text += f"   _{ach['desc']}_\n\n"
-
-    await update.message.reply_text(
-        text, parse_mode="Markdown", reply_markup=main_menu_kb()
-    )
-
-
-async def cmd_referral(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    db_user = get_user(user_id)
-    if not db_user:
-        await update.message.reply_text("Avval /start bosing!")
-        return
-
-    bot_info = await ctx.bot.get_me()
-    link = get_referral_link(user_id, bot_info.username)
-    ref_count = db_user.get("referral_count", 0)
-
-    await update.message.reply_text(
-        f"👥 *Referral tizimi*\n\n"
-        f"Do'stlaringizni taklif qiling!\n\n"
-        f"🔗 Sizning havola:\n`{link}`\n\n"
-        f"👤 Taklif qilganlar: *{ref_count}* ta\n\n"
-        f"🏅 *Mukofotlar:*\n"
-        f"• 1 ta → 👥 Do'st taklif qildi\n"
-        f"• 5 ta → 👨‍👩‍👧‍👦 Jamoa quruvchi",
-        parse_mode="Markdown",
-        reply_markup=main_menu_kb(),
-    )
-
-
 async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "❓ *Qo'llanma*\n\n"
         "*1️⃣ Trek orqali zona:*\n"
-        "▶️ Trek boshlang → 📍 Joylashuvni yuboring → Aylana yasab boshqa nuqtaga qaytib keling → ⏹ Trek tugatish\n\n"
+        "▶️ Trek boshlang → 📡 Live joylashuvni ulang → Aylana yasab qaytib keling → ⏹ Trek tugatish\n\n"
+        "*📡 Live Location qanday ulash:*\n"
+        "Trek boshlashda tugma chiqadi → Uni bosing → "
+        "_📎 paperclip → Location → Share Live Location_ → vaqt tanlang\n\n"
         "*2️⃣ Doira zona:*\n"
         "📍 Joylashuvni yuboring → Doira zona yaratish → Radius tanlang\n\n"
         "*⚔️ Zona egallash:*\n"
-        "Dushman zonasini aylanib o'ting (zona markazi trek ichida bo'lsin)\n\n"
-        "*🔔 Bildirishnoma:*\n"
-        "Kimdir 200m yaqinlashsa — xabar olasiz\n\n"
+        "Dushman zonasini aylanib o'ting\n\n"
         "*📊 Komandalar:*\n"
         "/stats — statistika\n"
         "/zones — zonalarim\n"
         "/leaderboard — reyting\n"
-        "/team — jamoa o'zgartirish\n"
-        "/history [zona\\_id] — zona tarixi",
+        "/team — jamoa o'zgartirish",
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=main_menu_kb(),
     )
@@ -780,11 +656,9 @@ async def cmd_zones(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_history(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     args = update.message.text.split()
-    # Supports both /history 5 and /history_5
     if len(args) > 1:
         zone_id_str = args[1]
     else:
-        # /history_5 formatini ham qo'llab-quvvatlash
         raw = update.message.text.lstrip("/").replace("history_", "").replace("history", "")
         zone_id_str = raw.strip()
 
@@ -817,11 +691,54 @@ async def cmd_history(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
 
 
+async def cmd_achievements(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    earned = get_user_achievements(user_id)
+    earned_codes = {a["code"] for a in earned}
+
+    text = "🏅 *Yutuqlar*\n\n"
+    text += f"✅ Qozonilgan: {len(earned)}/{len(ACHIEVEMENTS)}\n\n"
+
+    for code, ach in ACHIEVEMENTS.items():
+        if code in earned_codes:
+            text += f"✅ {ach['name']}\n"
+        else:
+            text += f"🔒 {ach['name']}\n"
+        text += f"   _{ach['desc']}_\n\n"
+
+    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=main_menu_kb())
+
+
+async def cmd_referral(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    db_user = get_user(user_id)
+    if not db_user:
+        await update.message.reply_text("Avval /start bosing!")
+        return
+
+    bot_info = await ctx.bot.get_me()
+    link = get_referral_link(user_id, bot_info.username)
+    ref_count = db_user.get("referral_count", 0)
+
+    await update.message.reply_text(
+        f"👥 *Referral tizimi*\n\n"
+        f"Do'stlaringizni taklif qiling!\n\n"
+        f"🔗 Sizning havola:\n`{link}`\n\n"
+        f"👤 Taklif qilganlar: *{ref_count}* ta",
+        parse_mode="Markdown",
+        reply_markup=main_menu_kb(),
+    )
+
+
 # ══════════════════════════════════════════════════════
-# LOCATION HANDLER
+# 🔧 LOCATION HANDLER — ASOSIY TUZATISH
 # ══════════════════════════════════════════════════════
 
 async def handle_location(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    Oddiy yoki Live location yuborilganda (NEW message).
+    Live location birinchi yuborilganda ham bu handler ishlaydi.
+    """
     user_id = update.effective_user.id
     db_user = get_user(user_id)
 
@@ -829,50 +746,55 @@ async def handle_location(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❗ Avval jamoa tanlang!", reply_markup=team_kb())
         return
 
-    lat  = update.message.location.latitude
-    lng  = update.message.location.longitude
-    
-    # Live location yoki oddiy location — ikkalasini ham qabul qilamiz
+    lat = update.message.location.latitude
+    lng = update.message.location.longitude
     is_live = update.message.location.live_period is not None
     mode = ctx.user_data.get("mode", MODE_IDLE)
 
-    # ── Trek rejimi: live yoki oddiy location ──
+    # ── Trek rejimi ──
     if mode == MODE_TREK:
+        # Live location ni message_id bilan bog'lash (edited_message uchun)
+        if is_live:
+            ctx.user_data["live_location_msg_id"] = update.message.message_id
+            logger.info(f"Live location boshlandi: user={user_id}, msg_id={update.message.message_id}")
+
         result = add_trek_point(user_id, lat, lng)
         if result:
             pts     = len(result["points"])
             dist_km = result["distance_m"] / 1000
-            
-            if is_live:
-                # Live location da faqat oxirgi xabarni yangilash (spam bo'lmasin)
-                last_msg_id = ctx.user_data.get("trek_status_msg_id")
-                status_text = (
-                    f"📡 *Trek yozilmoqda...*\n\n"
-                    f"📍 Nuqtalar: {pts}\n"
-                    f"📏 Masofa: {dist_km:.3f} km\n"
+            status_text = (
+                f"📡 *Trek yozilmoqda...*\n\n"
+                f"{'🔴 LIVE' if is_live else '📍 Nuqta'}\n"
+                f"📍 Nuqtalar: {pts}\n"
+                f"📏 Masofa: {dist_km:.3f} km\n"
+            )
+            if result["is_closed"]:
+                status_text += "\n✅ *Aylana yaratildi! Trek tugatish tugmasini bosing.*"
+
+            # Status xabarini yangilash yoki yangi yuborish
+            last_msg_id = ctx.user_data.get("trek_status_msg_id")
+            try:
+                if last_msg_id:
+                    await ctx.bot.edit_message_text(
+                        chat_id=update.effective_chat.id,
+                        message_id=last_msg_id,
+                        text=status_text,
+                        parse_mode=ParseMode.MARKDOWN,
+                    )
+                else:
+                    sent = await update.message.reply_text(
+                        status_text,
+                        parse_mode=ParseMode.MARKDOWN,
+                        reply_markup=trek_menu_kb(),
+                    )
+                    ctx.user_data["trek_status_msg_id"] = sent.message_id
+            except Exception as e:
+                logger.warning(f"Status update error: {e}")
+                sent = await update.message.reply_text(
+                    status_text,
+                    parse_mode=ParseMode.MARKDOWN,
                 )
-                if result["is_closed"]:
-                    status_text += "\n✅ *Aylana yaratildi! Trek tugatish tugmasini bosing.*"
-                
-                try:
-                    if last_msg_id:
-                        await ctx.bot.edit_message_text(
-                            chat_id=update.effective_chat.id,
-                            message_id=last_msg_id,
-                            text=status_text,
-                            parse_mode=ParseMode.MARKDOWN,
-                        )
-                    else:
-                        sent = await update.message.reply_text(status_text, parse_mode=ParseMode.MARKDOWN)
-                        ctx.user_data["trek_status_msg_id"] = sent.message_id
-                except Exception:
-                    pass
-            else:
-                # Oddiy location — xabar yuborish
-                msg = f"📍 Nuqta #{pts} | 📏 {dist_km:.3f} km"
-                if result["is_closed"]:
-                    msg += "\n\n✅ *Trek yopiq! ⏹ Trek tugatish tugmasini bosing.*"
-                await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+                ctx.user_data["trek_status_msg_id"] = sent.message_id
         return
 
     # ── Doira markaz ──
@@ -886,7 +808,7 @@ async def handle_location(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ── Oddiy joylashuv ──
+    # ── Oddiy joylashuv (IDLE rejim) ──
     ctx.user_data["last_lat"] = lat
     ctx.user_data["last_lng"] = lng
     nearby = get_zones_near(lat, lng, 500)
@@ -903,18 +825,71 @@ async def handle_location(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 te  = TEAMS.get(z["team"], {"emoji": "❓"})["emoji"]
                 nm  = own["first_name"] if own else "?"
                 owner_txt = f"{te} {nm}"
-            tp = "⭕" if z["zone_type"] == "circle" else "🔷"
+            tp   = "⭕" if z["zone_type"] == "circle" else "🔷"
             nm_z = z["name"] or f"#{z['id']}"
             msg += f"  {tp} {nm_z} — {owner_txt} ({z['distance']:.0f}m)\n"
     else:
         msg += "\n🔍 Yaqin atrofda zona yo'q."
 
-    msg += "\n\nZona yaratish uchun tugmalardan foydalaning:"
+    msg += "\n\nZona yaratish uchun:"
     await update.message.reply_text(
         msg,
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=zone_create_kb(),
     )
+
+
+async def handle_live_location(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    🔧 TUZATILGAN: Live location YANGILANISHI (edited_message).
+
+    Muammo: filters.UpdateType.EDITED & filters.LOCATION ishlamaydi.
+    Yechim: filters.UpdateType.EDITED_MESSAGE & filters.LOCATION ishlatiladi.
+    """
+    user_id = update.effective_user.id
+    db_user = get_user(user_id)
+    if not db_user or not db_user["team"]:
+        return
+
+    mode = ctx.user_data.get("mode", MODE_IDLE)
+    if mode != MODE_TREK:
+        return
+
+    msg = update.edited_message
+    if not msg or not msg.location:
+        return
+
+    lat = msg.location.latitude
+    lng = msg.location.longitude
+
+    result = add_trek_point(user_id, lat, lng)
+    if not result:
+        return
+
+    pts     = len(result["points"])
+    dist_km = result["distance_m"] / 1000
+    status_text = (
+        f"📡 *Trek yozilmoqda... (LIVE)*\n\n"
+        f"📍 Nuqtalar: {pts}\n"
+        f"📏 Masofa: {dist_km:.3f} km\n"
+    )
+    if result["is_closed"]:
+        status_text += "\n✅ *Aylana yaratildi! ⏹ Trek tugatish tugmasini bosing.*"
+
+    last_msg_id = ctx.user_data.get("trek_status_msg_id")
+    try:
+        if last_msg_id:
+            await ctx.bot.edit_message_text(
+                chat_id=update.effective_chat.id,
+                message_id=last_msg_id,
+                text=status_text,
+                parse_mode=ParseMode.MARKDOWN,
+            )
+        else:
+            sent = await msg.reply_text(status_text, parse_mode=ParseMode.MARKDOWN)
+            ctx.user_data["trek_status_msg_id"] = sent.message_id
+    except Exception as e:
+        logger.debug(f"Live location status update: {e}")
 
 
 # ══════════════════════════════════════════════════════
@@ -925,7 +900,6 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     text    = update.message.text
     user_id = update.effective_user.id
 
-    # /history_5 kabi komandalar
     if text.startswith("/history"):
         await cmd_history(update, ctx)
         return
@@ -935,20 +909,27 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if not db_user or not db_user["team"]:
             await update.message.reply_text("Avval /start bosing!")
             return
+
         ctx.user_data["mode"] = MODE_TREK
+        ctx.user_data.pop("trek_status_msg_id", None)
+        ctx.user_data.pop("live_location_msg_id", None)
         start_trek(user_id)
         team = TEAMS[db_user["team"]]
-        sent = await update.message.reply_text(
+
+        await update.message.reply_text(
             f"▶️ *Trek boshlandi!*\n\n"
             f"{team['emoji']} Jamoa: {team['name']}\n\n"
-            f"📡 *Quyidagi tugmani bosing → Live joylashuvni tanlang*\n"
-            f"_(15 daqiqa yoki 1 soat)_\n\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"📡 *Live Location ulash (TAVSIYA):*\n\n"
+            f"1️⃣ Pastdagi 📡 tugmani bosing\n"
+            f"2️⃣ *Share Live Location* tanlang\n"
+            f"3️⃣ Vaqt tanlang: *15 daqiqa / 1 soat / 8 soat*\n\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
             f"Aylana yasab boshlang'ich nuqtaga qaytib keling.\n"
             f"Keyin ⏹ *Trek tugatish* bosing.",
             parse_mode=ParseMode.MARKDOWN,
             reply_markup=trek_menu_kb(),
         )
-        ctx.user_data["trek_start_msg"] = sent.message_id
 
     elif text == "⏹ Trek tugatish":
         await handle_finish_trek(update, ctx)
@@ -975,7 +956,6 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await cmd_help(update, ctx)
 
     else:
-        # Noma'lum xabar — menyu ko'rsatmasdan javob berish
         await update.message.reply_text(
             "❓ Tushunmadim. Quyidagi tugmalardan foydalaning.",
             reply_markup=main_menu_kb(),
@@ -987,6 +967,7 @@ async def handle_finish_trek(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     db_user = get_user(user_id)
     ctx.user_data["mode"] = MODE_IDLE
     ctx.user_data.pop("trek_status_msg_id", None)
+    ctx.user_data.pop("live_location_msg_id", None)
 
     result = finish_trek(user_id)
     if not result or len(result["points"]) < 5:
@@ -1016,7 +997,6 @@ async def handle_finish_trek(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 old = capture_zone(z["id"], user_id, team)
                 if old:
                     captured.append(old)
-                    # Eski egaga bildirishnoma
                     team_info = TEAMS[team]
                     z_name    = old["name"] or f"Zona #{old['id']}"
                     try:
@@ -1031,7 +1011,6 @@ async def handle_finish_trek(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     except Exception as e:
                         logger.warning(f"Capture notif error: {e}")
 
-        # Achievement tekshirish
         await check_and_award(user_id, update.get_bot(), get_user(user_id))
 
         msg += (
@@ -1065,12 +1044,6 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     data    = q.data
     user_id = update.effective_user.id
 
-    # ── Onboarding navigatsiya (eski matn slaydlar) ──
-    if data.startswith("onboard_"):
-        idx = int(data.split("_")[1]) - 1
-        await send_onboarding(user_id, idx, ctx.bot, message=q.message)
-        return
-
     if data.startswith("team:"):
         team_key = data.split(":")[1]
         if team_key not in TEAMS:
@@ -1086,16 +1059,17 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     elif data == "zone:circle":
         ctx.user_data["mode"] = MODE_CIRCLE
         await q.edit_message_text(
-            "⭕ *Doira zona*\n\n📍 Markaz nuqtani yuboring (joylashuvni yuboring):",
+            "⭕ *Doira zona*\n\n📍 Markaz nuqtani yuboring:",
             parse_mode=ParseMode.MARKDOWN,
         )
 
     elif data == "zone:trek":
         ctx.user_data["mode"] = MODE_TREK
+        ctx.user_data.pop("trek_status_msg_id", None)
         start_trek(user_id)
         await q.edit_message_text(
             "▶️ *Trek boshlandi!*\n\n"
-            "📍 Joylashuvingizni muntazam yuboring.\n"
+            "📡 Live joylashuvni ulang yoki 📍 joylashuvni yuboring.\n"
             "Aylana yasab boshlang'ich nuqtaga qaytib keling.\n"
             "Keyin ⏹ Trek tugatish.",
             parse_mode=ParseMode.MARKDOWN,
@@ -1140,17 +1114,14 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 # ══════════════════════════════════════════════════════
-# BACKGROUND: Tajovuz tekshiruvi
+# BACKGROUND TASKS
 # ══════════════════════════════════════════════════════
 
 async def invasion_checker(app):
-    """Har 60s da aktiv trekdagi o'yinchilar boshqa zonalarga yaqinmi — tekshirish"""
     while True:
         try:
             with get_db() as conn:
-                treks = conn.execute(
-                    "SELECT * FROM treks WHERE status='active'"
-                ).fetchall()
+                treks = conn.execute("SELECT * FROM treks WHERE status='active'").fetchall()
                 for trek in treks:
                     trek  = dict(trek)
                     pts   = json.loads(trek["points"])
@@ -1166,7 +1137,6 @@ async def invasion_checker(app):
                     for z in near_zones:
                         if z["owner_id"] == uid:
                             continue
-                        # Spam oldini olish: 1 soatda bir marta
                         key = f"{z['id']}_{uid}"
                         last_t = notif_cache.get(key)
                         if last_t and (datetime.now() - last_t).seconds < 3600:
@@ -1192,145 +1162,13 @@ async def invasion_checker(app):
         await asyncio.sleep(60)
 
 
-# ══════════════════════════════════════════════════════
-# MAIN
-# ══════════════════════════════════════════════════════
-
-
-
-# ══════════════════════════════════════════════════════
-# ACHIEVEMENTS
-# ══════════════════════════════════════════════════════
-
-ACHIEVEMENTS = {
-    "first_zone":    {"name": "🏴 Birinchi zona",       "desc": "Birinchi zonangizni yaratingiz"},
-    "zone_x5":       {"name": "🗺 Kartograf",            "desc": "5 ta zona yarating"},
-    "zone_x20":      {"name": "🌍 Hududboz",             "desc": "20 ta zona yarating"},
-    "first_capture": {"name": "⚔️ Birinchi hujum",       "desc": "Birinchi dushman zonasini egallang"},
-    "capture_x5":    {"name": "🔥 Tajovuzkor",           "desc": "5 ta zona egallang"},
-    "capture_x10":   {"name": "💀 Bosqinchi",            "desc": "10 ta zona egallang"},
-    "km_10":         {"name": "🏃 10km yugurdingiz",      "desc": "Jami 10 km yuring"},
-    "km_50":         {"name": "🚴 50km masofachi",        "desc": "Jami 50 km yuring"},
-    "km_100":        {"name": "🏅 100km legend",          "desc": "Jami 100 km yuring"},
-    "referral_1":    {"name": "👥 Do'st taklif qildi",   "desc": "1 do'st taklif qiling"},
-    "referral_5":    {"name": "👨‍👩‍👧‍👦 Jamoa quruvchi",     "desc": "5 do'st taklif qiling"},
-}
-
-
-def get_user_achievements(user_id: int) -> list:
-    with get_db() as conn:
-        rows = conn.execute(
-            "SELECT code, earned_at FROM achievements WHERE user_id=? ORDER BY earned_at",
-            (user_id,)
-        ).fetchall()
-        return [dict(r) for r in rows]
-
-
-def award_achievement(user_id: int, code: str) -> bool:
-    """Achievement berish. Yangi bo'lsa True qaytaradi."""
-    try:
-        with get_db() as conn:
-            conn.execute(
-                "INSERT OR IGNORE INTO achievements (user_id, code) VALUES (?, ?)",
-                (user_id, code)
-            )
-            return conn.execute(
-                "SELECT changes()"
-            ).fetchone()[0] > 0
-    except Exception:
-        return False
-
-
-async def check_and_award(user_id: int, app, db_user: dict = None):
-    """Foydalanuvchi statistikasiga qarab achievement berish"""
-    if not db_user:
-        db_user = get_user(user_id)
-    if not db_user:
-        return
-
-    awarded = []
-
-    # Zona achievementlar
-    zones_owned = db_user.get("zones_owned", 0)
-    zones_taken = db_user.get("zones_taken", 0)
-    total_km    = db_user.get("total_km", 0)
-    ref_count   = db_user.get("referral_count", 0)
-
-    checks = [
-        (zones_owned >= 1,  "first_zone"),
-        (zones_owned >= 5,  "zone_x5"),
-        (zones_owned >= 20, "zone_x20"),
-        (zones_taken >= 1,  "first_capture"),
-        (zones_taken >= 5,  "capture_x5"),
-        (zones_taken >= 10, "capture_x10"),
-        (total_km >= 10,    "km_10"),
-        (total_km >= 50,    "km_50"),
-        (total_km >= 100,   "km_100"),
-        (ref_count >= 1,    "referral_1"),
-        (ref_count >= 5,    "referral_5"),
-    ]
-
-    for condition, code in checks:
-        if condition and award_achievement(user_id, code):
-            awarded.append(code)
-
-    # Yangi achievement xabari yuborish
-    for code in awarded:
-        ach = ACHIEVEMENTS.get(code, {})
-        try:
-            await app.bot.send_message(
-                chat_id=user_id,
-                text=f"🏅 *Yangi yutuq!*\n\n"
-                     f"{ach.get('name', code)}\n"
-                     f"_{ach.get('desc', '')}_",
-                parse_mode="Markdown",
-            )
-        except Exception as e:
-            logger.warning(f"Achievement notify error: {e}")
-
-
-# ══════════════════════════════════════════════════════
-# REFERRAL
-# ══════════════════════════════════════════════════════
-
-def apply_referral(new_user_id: int, referrer_id: int):
-    """Yangi foydalanuvchiga referrer belgilash"""
-    if new_user_id == referrer_id:
-        return False
-    with get_db() as conn:
-        user = conn.execute(
-            "SELECT referred_by FROM users WHERE user_id=?", (new_user_id,)
-        ).fetchone()
-        if not user or user["referred_by"]:
-            return False  # Allaqachon referral bor
-        conn.execute(
-            "UPDATE users SET referred_by=? WHERE user_id=?",
-            (referrer_id, new_user_id)
-        )
-        conn.execute(
-            "UPDATE users SET referral_count = referral_count + 1 WHERE user_id=?",
-            (referrer_id,)
-        )
-        return True
-
-
-def get_referral_link(user_id: int, bot_username: str) -> str:
-    return f"https://t.me/{bot_username}?start=ref_{user_id}"
-
-
-# ══════════════════════════════════════════════════════
-# ZONE EXPIRY (vaqt cheklovi)
-# ══════════════════════════════════════════════════════
-
-ZONE_EXPIRE_DAYS = int(os.getenv("ZONE_EXPIRE_DAYS", "7"))  # Default: 7 kun
+ZONE_EXPIRE_DAYS = int(os.getenv("ZONE_EXPIRE_DAYS", "7"))
 
 
 async def expire_old_zones(app):
-    """Eski zonalarni neytrallashtirish (egasiz qilish)"""
     while True:
         try:
             with get_db() as conn:
-                # 7 kundan eski, hech kim qayta egallmagan zonalar
                 old_zones = conn.execute("""
                     SELECT z.*, u.first_name, u.team as owner_team
                     FROM zones z
@@ -1346,21 +1184,13 @@ async def expire_old_zones(app):
 
                 for zone in old_zones:
                     zone = dict(zone)
-                    # Zonani neytral qilish (system user = 0)
-                    conn.execute(
-                        "UPDATE zones SET owner_id=0, team='neutral' WHERE id=?",
-                        (zone["id"],)
-                    )
-                    conn.execute(
-                        "UPDATE users SET zones_owned = MAX(0, zones_owned-1) WHERE user_id=?",
-                        (zone["owner_id"],)
-                    )
+                    conn.execute("UPDATE zones SET owner_id=0, team='neutral' WHERE id=?", (zone["id"],))
+                    conn.execute("UPDATE users SET zones_owned = MAX(0, zones_owned-1) WHERE user_id=?", (zone["owner_id"],))
                     conn.execute("""
                         INSERT INTO zone_history (zone_id, from_user, from_team, to_user, to_team, action)
                         VALUES (?, ?, ?, 0, 'neutral', 'expired')
                     """, (zone["id"], zone["owner_id"], zone["owner_team"]))
 
-                    # Egasiga xabar
                     zone_name = zone["name"] or f"Zona #{zone['id']}"
                     try:
                         await app.bot.send_message(
@@ -1376,45 +1206,23 @@ async def expire_old_zones(app):
 
         except Exception as e:
             logger.error(f"Expire checker error: {e}")
-
-        await asyncio.sleep(3600)  # Har 1 soatda tekshirish
+        await asyncio.sleep(3600)
 
 
 # ══════════════════════════════════════════════════════
-# MINI APP API SERVER
+# WEB APP API
 # ══════════════════════════════════════════════════════
 
 MINI_APP_PORT = int(os.getenv("PORT", "8080"))
-BOT_TOKEN_FOR_VERIFY = os.getenv("BOT_TOKEN", "")
-
-
-def verify_telegram_webapp(init_data: str) -> bool:
-    """Telegram WebApp ma'lumotlarini tekshirish"""
-    try:
-        parsed = {}
-        for item in init_data.split("&"):
-            if "=" in item:
-                k, v = item.split("=", 1)
-                parsed[k] = v
-        
-        received_hash = parsed.pop("hash", "")
-        data_check = "\n".join(f"{k}={v}" for k, v in sorted(parsed.items()))
-        secret_key = hmac.new(b"WebAppData", BOT_TOKEN_FOR_VERIFY.encode(), hashlib.sha256).digest()
-        calc_hash = hmac.new(secret_key, data_check.encode(), hashlib.sha256).hexdigest()
-        return hmac.compare_digest(calc_hash, received_hash)
-    except Exception:
-        return True  # Dev mode da skip
 
 
 async def api_zones(request: web.Request) -> web.Response:
-    """Barcha zonalarni JSON qaytarish"""
     try:
         zones = get_all_zones()
         result = []
         for z in zones:
             owner = get_user(z["owner_id"]) if z["owner_id"] else None
             team_info = TEAMS.get(z["team"], {"emoji": "❓", "name": "Neytral"})
-            
             geom = json.loads(z["geometry"])
             result.append({
                 "id": z["id"],
@@ -1432,7 +1240,6 @@ async def api_zones(request: web.Request) -> web.Response:
                 "area_m2": z["area_m2"],
                 "created_at": z["created_at"],
             })
-        
         return web.Response(
             text=json.dumps(result, ensure_ascii=False),
             content_type="application/json",
@@ -1443,19 +1250,15 @@ async def api_zones(request: web.Request) -> web.Response:
 
 
 async def api_user(request: web.Request) -> web.Response:
-    """Foydalanuvchi ma'lumotlari"""
     try:
         user_id = int(request.rel_url.query.get("user_id", 0))
         if not user_id:
             return web.Response(text=json.dumps({"error": "user_id required"}), status=400)
-        
         db_user = get_user(user_id)
         if not db_user:
             return web.Response(text=json.dumps({"error": "not found"}), status=404)
-        
         zones = get_user_zones(user_id)
         team_info = TEAMS.get(db_user["team"], {"emoji": "❓", "name": "Yo'q"})
-        
         result = {
             "user_id": user_id,
             "first_name": db_user["first_name"],
@@ -1474,7 +1277,6 @@ async def api_user(request: web.Request) -> web.Response:
                 "area_m2": z["area_m2"],
             } for z in zones],
         }
-        
         return web.Response(
             text=json.dumps(result, ensure_ascii=False),
             content_type="application/json",
@@ -1485,7 +1287,7 @@ async def api_user(request: web.Request) -> web.Response:
 
 
 async def api_active_treks(request: web.Request) -> web.Response:
-    """Faol treklar (yurgan yo'llar) ni qaytarish"""
+    """Faol treklar — xaritada chiziq ko'rsatish uchun"""
     try:
         with get_db() as conn:
             treks = conn.execute("""
@@ -1505,7 +1307,7 @@ async def api_active_treks(request: web.Request) -> web.Response:
                 "owner_name": t["first_name"],
                 "team":       t["team"],
                 "team_emoji": team_info["emoji"],
-                "points":     points[-50:],  # Oxirgi 50 nuqta
+                "points":     points[-100:],  # Oxirgi 100 nuqta
                 "distance_m": t["distance_m"],
             })
         return web.Response(
@@ -1518,7 +1320,6 @@ async def api_active_treks(request: web.Request) -> web.Response:
 
 
 async def api_active_players(request: web.Request) -> web.Response:
-    """Faol o'yinchilar (oxirgi trek nuqtasi bo'yicha)"""
     try:
         with get_db() as conn:
             treks = conn.execute("""
@@ -1556,26 +1357,22 @@ async def api_health(request: web.Request) -> web.Response:
 
 
 async def start_web_server():
-    """API serverni ishga tushirish"""
     app_web = web.Application()
     app_web.router.add_get("/api/zones",          api_zones)
     app_web.router.add_get("/api/user",           api_user)
     app_web.router.add_get("/api/active_treks",   api_active_treks)
     app_web.router.add_get("/api/active_players", api_active_players)
     app_web.router.add_get("/health",             api_health)
-    
     runner = web.AppRunner(app_web)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", MINI_APP_PORT)
     await site.start()
     logger.info(f"🌐 API server started on port {MINI_APP_PORT}")
-    
-    # Server abadiy ishlaydi
     while True:
         await asyncio.sleep(3600)
 
+
 async def handle_webapp_data(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Mini App dan kelgan ma'lumotlarni qabul qilish"""
     user_id = update.effective_user.id
     try:
         data = json.loads(update.message.web_app_data.data)
@@ -1583,9 +1380,7 @@ async def handle_webapp_data(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     action = data.get("action")
-
     if action == "onboarding_done":
-        # Onboarding tugadi — jamoa tanlash
         upsert_user(user_id, update.effective_user.username or "", update.effective_user.first_name or "")
         db_user = get_user(user_id)
         if not db_user or not db_user["team"]:
@@ -1596,62 +1391,117 @@ async def handle_webapp_data(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                  InlineKeyboardButton("🟡 Sariq",  callback_data="team:yellow")],
             ])
             await update.message.reply_text(
-                "🎽 *Jamoangizni tanlang:*\n\n"
-                "🔴 *Qizil* — Jangovar\n"
-                "🔵 *Ko'k* — Strategik\n"
-                "🟢 *Yashil* — Kengayuvchi\n"
-                "🟡 *Sariq* — Tezkor",
+                "🎽 *Jamoangizni tanlang:*",
                 parse_mode="Markdown",
                 reply_markup=kb,
             )
 
 
-async def handle_live_location(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Live location yangilanganda chaqiriladi (edited_message)"""
-    user_id = update.effective_user.id
-    db_user = get_user(user_id)
-    if not db_user or not db_user["team"]:
-        return
+# ══════════════════════════════════════════════════════
+# ACHIEVEMENTS
+# ══════════════════════════════════════════════════════
 
-    mode = ctx.user_data.get("mode", MODE_IDLE)
-    if mode != MODE_TREK:
-        return
+ACHIEVEMENTS = {
+    "first_zone":    {"name": "🏴 Birinchi zona",       "desc": "Birinchi zonangizni yaratingiz"},
+    "zone_x5":       {"name": "🗺 Kartograf",            "desc": "5 ta zona yarating"},
+    "zone_x20":      {"name": "🌍 Hududboz",             "desc": "20 ta zona yarating"},
+    "first_capture": {"name": "⚔️ Birinchi hujum",       "desc": "Birinchi dushman zonasini egallang"},
+    "capture_x5":    {"name": "🔥 Tajovuzkor",           "desc": "5 ta zona egallang"},
+    "capture_x10":   {"name": "💀 Bosqinchi",            "desc": "10 ta zona egallang"},
+    "km_10":         {"name": "🏃 10km yugurdingiz",      "desc": "Jami 10 km yuring"},
+    "km_50":         {"name": "🚴 50km masofachi",        "desc": "Jami 50 km yuring"},
+    "km_100":        {"name": "🏅 100km legend",          "desc": "Jami 100 km yuring"},
+    "referral_1":    {"name": "👥 Do'st taklif qildi",   "desc": "1 do'st taklif qiling"},
+    "referral_5":    {"name": "👨‍👩‍👧‍👦 Jamoa quruvchi",     "desc": "5 do'st taklif qiling"},
+}
 
-    msg = update.edited_message
-    if not msg or not msg.location:
-        return
 
-    lat = msg.location.latitude
-    lng = msg.location.longitude
+def get_user_achievements(user_id: int) -> list:
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT code, earned_at FROM achievements WHERE user_id=? ORDER BY earned_at",
+            (user_id,)
+        ).fetchall()
+        return [dict(r) for r in rows]
 
-    result = add_trek_point(user_id, lat, lng)
-    if not result:
-        return
 
-    pts     = len(result["points"])
-    dist_km = result["distance_m"] / 1000
-    status_text = (
-        f"📡 *Trek yozilmoqda...*\n\n"
-        f"📍 Nuqtalar: {pts}\n"
-        f"📏 Masofa: {dist_km:.3f} km\n"
-    )
-    if result["is_closed"]:
-        status_text += "\n✅ *Aylana yaratildi! ⏹ Trek tugatish tugmasini bosing.*"
-
-    last_msg_id = ctx.user_data.get("trek_status_msg_id")
+def award_achievement(user_id: int, code: str) -> bool:
     try:
-        if last_msg_id:
-            await ctx.bot.edit_message_text(
-                chat_id=update.effective_chat.id,
-                message_id=last_msg_id,
-                text=status_text,
-                parse_mode=ParseMode.MARKDOWN,
+        with get_db() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO achievements (user_id, code) VALUES (?, ?)",
+                (user_id, code)
             )
-        else:
-            sent = await msg.reply_text(status_text, parse_mode=ParseMode.MARKDOWN)
-            ctx.user_data["trek_status_msg_id"] = sent.message_id
+            return conn.execute("SELECT changes()").fetchone()[0] > 0
     except Exception:
-        pass
+        return False
+
+
+async def check_and_award(user_id: int, app, db_user: dict = None):
+    if not db_user:
+        db_user = get_user(user_id)
+    if not db_user:
+        return
+
+    awarded = []
+    zones_owned = db_user.get("zones_owned", 0)
+    zones_taken = db_user.get("zones_taken", 0)
+    total_km    = db_user.get("total_km", 0)
+    ref_count   = db_user.get("referral_count", 0)
+
+    checks = [
+        (zones_owned >= 1,  "first_zone"),
+        (zones_owned >= 5,  "zone_x5"),
+        (zones_owned >= 20, "zone_x20"),
+        (zones_taken >= 1,  "first_capture"),
+        (zones_taken >= 5,  "capture_x5"),
+        (zones_taken >= 10, "capture_x10"),
+        (total_km >= 10,    "km_10"),
+        (total_km >= 50,    "km_50"),
+        (total_km >= 100,   "km_100"),
+        (ref_count >= 1,    "referral_1"),
+        (ref_count >= 5,    "referral_5"),
+    ]
+
+    for condition, code in checks:
+        if condition and award_achievement(user_id, code):
+            awarded.append(code)
+
+    for code in awarded:
+        ach = ACHIEVEMENTS.get(code, {})
+        try:
+            await app.bot.send_message(
+                chat_id=user_id,
+                text=f"🏅 *Yangi yutuq!*\n\n{ach.get('name', code)}\n_{ach.get('desc', '')}_",
+                parse_mode="Markdown",
+            )
+        except Exception as e:
+            logger.warning(f"Achievement notify error: {e}")
+
+
+# ══════════════════════════════════════════════════════
+# REFERRAL
+# ══════════════════════════════════════════════════════
+
+def apply_referral(new_user_id: int, referrer_id: int):
+    if new_user_id == referrer_id:
+        return False
+    with get_db() as conn:
+        user = conn.execute("SELECT referred_by FROM users WHERE user_id=?", (new_user_id,)).fetchone()
+        if not user or user["referred_by"]:
+            return False
+        conn.execute("UPDATE users SET referred_by=? WHERE user_id=?", (referrer_id, new_user_id))
+        conn.execute("UPDATE users SET referral_count = referral_count + 1 WHERE user_id=?", (referrer_id,))
+        return True
+
+
+def get_referral_link(user_id: int, bot_username: str) -> str:
+    return f"https://t.me/{bot_username}?start=ref_{user_id}"
+
+
+# ══════════════════════════════════════════════════════
+# MAIN — 🔧 FILTER TUZATILDI
+# ══════════════════════════════════════════════════════
 
 async def on_startup(app: Application) -> None:
     asyncio.create_task(invasion_checker(app))
@@ -1676,11 +1526,20 @@ def main():
     app.add_handler(CommandHandler("leaderboard", cmd_leaderboard))
     app.add_handler(CommandHandler("zones",       cmd_zones))
     app.add_handler(CommandHandler("history",     cmd_history))
-    app.add_handler(CommandHandler("map",          cmd_map))
-    app.add_handler(CommandHandler("achievements", cmd_achievements))
+    app.add_handler(CommandHandler("map",         cmd_map))
+    app.add_handler(CommandHandler("achievements",cmd_achievements))
     app.add_handler(CommandHandler("referral",    cmd_referral))
-    app.add_handler(MessageHandler(filters.LOCATION,                handle_location))
-    app.add_handler(MessageHandler(filters.UpdateType.EDITED & filters.LOCATION, handle_live_location))
+
+    # ✅ TUZATILDI: Oddiy va live location (yangi xabar)
+    app.add_handler(MessageHandler(filters.LOCATION, handle_location))
+
+    # ✅ TUZATILDI: Live location YANGILANISHI (edited_message)
+    # filters.UpdateType.EDITED_MESSAGE — to'g'ri filter
+    app.add_handler(MessageHandler(
+        filters.UpdateType.EDITED_MESSAGE & filters.LOCATION,
+        handle_live_location
+    ))
+
     app.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, handle_webapp_data))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(CallbackQueryHandler(handle_callback))
