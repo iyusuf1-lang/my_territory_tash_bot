@@ -5,6 +5,7 @@
 ✅ Trek Mini App orqali (GPS auto-tracking)
 ✅ /api/trek_submit — fetch orqali, limit yo'q!
 ✅ CORS to'liq hal qilindi
+✅ WebApp Data (initData) xavfsizlik (HMAC) tekshiruvi qo'shildi
 """
 
 import asyncio
@@ -14,7 +15,7 @@ import json
 import math
 import hmac
 import hashlib
-from urllib.parse import parse_qs, unquote
+from urllib.parse import parse_qs
 from datetime import datetime, timedelta
 from contextlib import contextmanager
 from aiohttp import web
@@ -53,6 +54,9 @@ notif_cache: dict = {}
 
 # Global app reference (trek_submit uchun kerak)
 _app: Application = None
+
+# Orqa fon jarayonlari (API, checker) xotiradan o'chib ketmasligi uchun
+background_tasks = set()
 
 # ══════════════════════════════════════════════════════
 # CORS HEADERS
@@ -179,18 +183,37 @@ def set_team(user_id: int, team: str):
 
 
 # ══════════════════════════════════════════════════════
-# TELEGRAM INIT DATA PARSER
+# TELEGRAM INIT DATA PARSER (SECURE)
 # ══════════════════════════════════════════════════════
 
 def parse_init_data(init_data: str) -> dict | None:
-    """tg.initData dan user_id va boshqa ma'lumotlarni olish"""
+    """tg.initData ni HMAC orqali xavfsiz tekshirish va user ma'lumotlarini olish"""
     try:
-        params = parse_qs(init_data)
-        user_str = params.get("user", [None])[0]
+        parsed = parse_qs(init_data)
+        if "hash" not in parsed:
+            return None
+        
+        # Hashni ajratib olish
+        hash_val = parsed.pop("hash")[0]
+        
+        # Parametrlarni alifbo tartibida birlashtirish
+        data_check_string = "\n".join(
+            f"{k}={parsed[k][0]}" for k in sorted(parsed.keys())
+        )
+        
+        # Token orqali tekshirish kalitini yaratish
+        secret_key = hmac.new(b"WebAppData", BOT_TOKEN.encode(), hashlib.sha256).digest()
+        calc_hash = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
+        
+        if calc_hash != hash_val:
+            logger.warning("🚨 Xavfsizlik: Qalbaki initData aniqlandi!")
+            return None
+
+        # Agar hash to'g'ri bo'lsa, user ma'lumotlarini qaytarish
+        user_str = parsed.get("user", [None])[0]
         if not user_str:
             return None
-        user = json.loads(unquote(user_str))
-        return user
+        return json.loads(user_str)
     except Exception as e:
         logger.warning(f"initData parse error: {e}")
         return None
@@ -497,7 +520,6 @@ def radius_kb() -> InlineKeyboardMarkup:
     ])
 
 
-# ✅ ReplyKeyboard — sendData o'rniga fetch ishlatiladi
 def trek_miniapp_kb(team: str = "") -> ReplyKeyboardMarkup:
     trek_url = MINI_APP_URL.rstrip("/") + "/trek.html"
     if team:
@@ -843,7 +865,7 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 # ══════════════════════════════════════════════════════
-# WEBAPP DATA HANDLER (onboarding uchun)
+# WEBAPP DATA HANDLER
 # ══════════════════════════════════════════════════════
 
 async def handle_webapp_data(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -868,8 +890,6 @@ async def handle_webapp_data(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             ])
             await update.message.reply_text("🎽 *Jamoangizni tanlang:*", parse_mode="Markdown", reply_markup=kb)
 
-    # trek_finished endi /api/trek_submit orqali keladi (fetch)
-    # Lekin eski sendData ham ishlasa qabul qilamiz
     elif action == "trek_finished":
         points = data.get("points", [])
         team   = data.get("team", "")
@@ -1029,10 +1049,6 @@ MINI_APP_PORT = int(os.getenv("PORT", "8080"))
 
 
 async def api_trek_submit(request: web.Request) -> web.Response:
-    """
-    ✅ YANGI ENDPOINT — fetch orqali trek yuborish
-    4096 bayt limit yo'q, xohlagan ko'p nuqta!
-    """
     try:
         body = await request.json()
     except Exception:
@@ -1041,13 +1057,13 @@ async def api_trek_submit(request: web.Request) -> web.Response:
             status=400, content_type="application/json", headers=CORS_HEADERS
         )
 
-    # tg.initData dan user_id olish
+    # tg.initData dan user_id olish (endi xavfsiz HMAC tekshiruvidan o'tadi)
     init_data = body.get("init_data", "")
     user_info = parse_init_data(init_data) if init_data else None
 
     if not user_info:
         return web.Response(
-            text=json.dumps({"ok": False, "error": "Unauthorized — initData yo'q"}),
+            text=json.dumps({"ok": False, "error": "Unauthorized — Yaroqsiz yoxud soxta initData"}),
             status=401, content_type="application/json", headers=CORS_HEADERS
         )
 
@@ -1061,7 +1077,6 @@ async def api_trek_submit(request: web.Request) -> web.Response:
             status=400, content_type="application/json", headers=CORS_HEADERS
         )
 
-    # Foydalanuvchini DB ga qo'shish
     upsert_user(user_id, username, first_name)
 
     points = body.get("points", [])
@@ -1071,12 +1086,9 @@ async def api_trek_submit(request: web.Request) -> web.Response:
 
     logger.info(f"Trek submit: user={user_id} points={len(points)} closed={closed} dist={dist_m:.0f}m")
 
-    # Trek ni ishlash
     msg = await process_trek(_app.bot, user_id, points, team, closed, dist_m)
 
-    # Foydalanuvchiga bot orqali xabar yuborish
     try:
-        from telegram import ReplyKeyboardMarkup, KeyboardButton
         await _app.bot.send_message(
             chat_id=user_id,
             text=msg,
@@ -1200,7 +1212,7 @@ async def api_health(request: web.Request) -> web.Response:
 async def start_web_server():
     app_web = web.Application(middlewares=[cors_middleware])
     app_web.router.add_route("OPTIONS", "/api/trek_submit",    lambda r: web.Response(status=200, headers=CORS_HEADERS))
-    app_web.router.add_post("/api/trek_submit",   api_trek_submit)   # ✅ YANGI
+    app_web.router.add_post("/api/trek_submit",   api_trek_submit)
     app_web.router.add_get("/api/zones",          api_zones)
     app_web.router.add_get("/api/user",           api_user)
     app_web.router.add_get("/api/active_treks",   api_active_treks)
@@ -1309,9 +1321,13 @@ def get_referral_link(user_id: int, bot_username: str) -> str:
 async def on_startup(app: Application) -> None:
     global _app
     _app = app
-    asyncio.create_task(invasion_checker(app))
-    asyncio.create_task(expire_old_zones(app))
-    asyncio.create_task(start_web_server())
+    
+    # Tasklarni saqlab qolish (o'chib ketmasligi uchun)
+    task1 = asyncio.create_task(invasion_checker(app))
+    task2 = asyncio.create_task(expire_old_zones(app))
+    task3 = asyncio.create_task(start_web_server())
+    
+    background_tasks.update({task1, task2, task3})
 
 
 def main():
