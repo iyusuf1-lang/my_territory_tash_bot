@@ -21,7 +21,7 @@ from aiohttp import web
 import sqlite3
 from telegram import (
     Update, InlineKeyboardButton, InlineKeyboardMarkup,
-    KeyboardButton, ReplyKeyboardMarkup
+    KeyboardButton, ReplyKeyboardMarkup, WebAppInfo
 )
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
@@ -387,13 +387,14 @@ def radius_kb() -> InlineKeyboardMarkup:
     ])
 
 
-def trek_miniapp_kb(team: str = "") -> InlineKeyboardMarkup:
+# ✅ TUZATILDI: InlineKeyboard → ReplyKeyboard (sendData ishlashi uchun)
+def trek_miniapp_kb(team: str = "") -> ReplyKeyboardMarkup:
     trek_url = MINI_APP_URL.rstrip("/") + "/trek.html"
     if team:
         trek_url += f"?team={team}"
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton("🗺 Trekni boshlash", web_app={"url": trek_url})
-    ]])
+    return ReplyKeyboardMarkup([[
+        KeyboardButton("🗺 Trekni boshlash", web_app=WebAppInfo(url=trek_url))
+    ]], resize_keyboard=True, one_time_keyboard=True)
 
 
 # ══════════════════════════════════════════════════════
@@ -671,7 +672,6 @@ async def handle_location(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     lng  = update.message.location.longitude
     mode = ctx.user_data.get("mode", MODE_IDLE)
 
-    # Doira markaz
     if mode == MODE_CIRCLE:
         ctx.user_data["circle_lat"] = lat
         ctx.user_data["circle_lng"] = lng
@@ -682,7 +682,6 @@ async def handle_location(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Oddiy joylashuv — yaqin zonalarni ko'rsatish
     ctx.user_data["last_lat"] = lat
     ctx.user_data["last_lng"] = lng
     nearby = get_zones_near(lat, lng, 500)
@@ -789,7 +788,6 @@ async def handle_webapp_data(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     action = data.get("action")
 
-    # ── Onboarding ──
     if action == "onboarding_done":
         upsert_user(user_id, update.effective_user.username or "", update.effective_user.first_name or "")
         db_user = get_user(user_id)
@@ -806,7 +804,6 @@ async def handle_webapp_data(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 reply_markup=kb,
             )
 
-    # ── Trek yakunlandi (Mini App dan) ──
     elif action == "trek_finished":
         points  = data.get("points", [])
         team    = data.get("team", "")
@@ -820,11 +817,9 @@ async def handle_webapp_data(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        # Foydalanuvchini DB ga qo'shish (agar yo'q bo'lsa)
         upsert_user(user_id, update.effective_user.username or "", update.effective_user.first_name or "")
         db_user = get_user(user_id)
 
-        # Bot dagi jamoani ustunlik qilish
         if db_user and db_user.get("team"):
             team = db_user["team"]
 
@@ -837,7 +832,6 @@ async def handle_webapp_data(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
         dist_km = dist_m / 1000
 
-        # Trek ni DB ga saqlash
         with get_db() as conn:
             conn.execute(
                 "UPDATE treks SET status='cancelled' WHERE user_id=? AND status='active'",
