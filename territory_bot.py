@@ -3,8 +3,8 @@
 🗺️ Toshkent Territory Bot
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
 ✅ Trek Mini App orqali (GPS auto-tracking)
-✅ Live location muammosi hal qilindi
-✅ Barcha importlar to'g'ri
+✅ /api/trek_submit — fetch orqali, limit yo'q!
+✅ CORS to'liq hal qilindi
 """
 
 import asyncio
@@ -14,6 +14,7 @@ import json
 import math
 import hmac
 import hashlib
+from urllib.parse import parse_qs, unquote
 from datetime import datetime, timedelta
 from contextlib import contextmanager
 from aiohttp import web
@@ -35,8 +36,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8664008696:AAEy6cuhP0yKKQu1Tp-IEm9FwTWCVRCrYOg")
-DB_PATH   = os.getenv("DB_PATH", "territory.db")
+BOT_TOKEN    = os.getenv("BOT_TOKEN", "8664008696:AAEy6cuhP0yKKQu1Tp-IEm9FwTWCVRCrYOg")
+DB_PATH      = os.getenv("DB_PATH", "territory.db")
 MINI_APP_URL = os.getenv("MINI_APP_URL", "https://iyusuf1-lang.github.io/my_territory_tash_bot/")
 
 TEAMS = {
@@ -48,8 +49,32 @@ TEAMS = {
 
 MODE_IDLE   = "idle"
 MODE_CIRCLE = "circle"
-
 notif_cache: dict = {}
+
+# Global app reference (trek_submit uchun kerak)
+_app: Application = None
+
+# ══════════════════════════════════════════════════════
+# CORS HEADERS
+# ══════════════════════════════════════════════════════
+
+CORS_HEADERS = {
+    "Access-Control-Allow-Origin":  "*",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, X-Telegram-Init-Data",
+}
+
+
+async def cors_middleware(app, handler):
+    async def middleware(request):
+        if request.method == "OPTIONS":
+            return web.Response(status=200, headers=CORS_HEADERS)
+        response = await handler(request)
+        for k, v in CORS_HEADERS.items():
+            response.headers[k] = v
+        return response
+    return middleware
+
 
 # ══════════════════════════════════════════════════════
 # DATABASE
@@ -70,7 +95,6 @@ def init_db():
             referral_count INTEGER DEFAULT 0,
             created_at     TEXT DEFAULT (datetime('now'))
         );
-
         CREATE TABLE IF NOT EXISTS zones (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
             owner_id    INTEGER NOT NULL,
@@ -87,7 +111,6 @@ def init_db():
             created_at  TEXT DEFAULT (datetime('now')),
             FOREIGN KEY (owner_id) REFERENCES users(user_id)
         );
-
         CREATE TABLE IF NOT EXISTS zone_history (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
             zone_id     INTEGER NOT NULL,
@@ -98,7 +121,6 @@ def init_db():
             action      TEXT NOT NULL,
             captured_at TEXT DEFAULT (datetime('now'))
         );
-
         CREATE TABLE IF NOT EXISTS treks (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id     INTEGER NOT NULL,
@@ -109,7 +131,6 @@ def init_db():
             status      TEXT DEFAULT 'active',
             FOREIGN KEY (user_id) REFERENCES users(user_id)
         );
-
         CREATE TABLE IF NOT EXISTS achievements (
             id        INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id   INTEGER NOT NULL,
@@ -158,6 +179,24 @@ def set_team(user_id: int, team: str):
 
 
 # ══════════════════════════════════════════════════════
+# TELEGRAM INIT DATA PARSER
+# ══════════════════════════════════════════════════════
+
+def parse_init_data(init_data: str) -> dict | None:
+    """tg.initData dan user_id va boshqa ma'lumotlarni olish"""
+    try:
+        params = parse_qs(init_data)
+        user_str = params.get("user", [None])[0]
+        if not user_str:
+            return None
+        user = json.loads(unquote(user_str))
+        return user
+    except Exception as e:
+        logger.warning(f"initData parse error: {e}")
+        return None
+
+
+# ══════════════════════════════════════════════════════
 # GEOMETRY
 # ══════════════════════════════════════════════════════
 
@@ -182,23 +221,6 @@ def point_in_polygon(lat, lng, polygon: list) -> bool:
             inside = not inside
         j = i
     return inside
-
-
-def calc_trek_distance(points: list) -> float:
-    total = 0.0
-    for i in range(1, len(points)):
-        total += haversine(
-            points[i-1]["lat"], points[i-1]["lng"],
-            points[i]["lat"],   points[i]["lng"]
-        )
-    return total
-
-
-def trek_is_closed(points: list, threshold_m: float = 50) -> bool:
-    if len(points) < 8:
-        return False
-    d = haversine(points[0]["lat"], points[0]["lng"], points[-1]["lat"], points[-1]["lng"])
-    return d <= threshold_m
 
 
 def polygon_centroid(points: list) -> tuple:
@@ -346,6 +368,94 @@ def get_zone_history(zone_id) -> list:
 
 
 # ══════════════════════════════════════════════════════
+# TREK PROCESSING (umumiy funksiya — bot va API uchun)
+# ══════════════════════════════════════════════════════
+
+async def process_trek(bot, user_id: int, points: list, team: str, closed: bool, dist_m: float) -> str:
+    """Trek ni ishlash: zona yaratish, km qo'shish, xabar matnini qaytarish"""
+
+    if not points or len(points) < 5:
+        return "❗ Trek juda qisqa (kamida 5 nuqta kerak)."
+
+    db_user = get_user(user_id)
+    if not db_user:
+        return "❗ Foydalanuvchi topilmadi. /start bosing."
+
+    # Bot dagi jamoani ustunlik qilish
+    if db_user.get("team"):
+        team = db_user["team"]
+
+    if not team or team not in TEAMS:
+        return "❗ Jamoa tanlanmagan. /start bosing."
+
+    dist_km = dist_m / 1000
+
+    # Trek ni DB ga saqlash
+    with get_db() as conn:
+        conn.execute("UPDATE treks SET status='cancelled' WHERE user_id=? AND status='active'", (user_id,))
+        conn.execute(
+            "INSERT INTO treks (user_id, points, distance_m, started_at, finished_at, status) "
+            "VALUES (?, ?, ?, datetime('now'), datetime('now'), 'finished')",
+            (user_id, json.dumps(points), dist_m)
+        )
+        conn.execute("UPDATE users SET total_km = total_km + ? WHERE user_id=?", (dist_km, user_id))
+
+    msg = f"⏹ *Trek yakunlandi!*\n📏 {dist_km:.3f} km | 📍 {len(points)} nuqta\n"
+
+    if closed:
+        zone_id = await create_zone_polygon_with_photo(bot, user_id, team, points)
+        area = polygon_area_m2(points)
+        captured = []
+
+        for z in get_all_zones():
+            if z["owner_id"] == user_id or z["id"] == zone_id:
+                continue
+            if zone_is_captured_by_trek(points, z):
+                old = capture_zone(z["id"], user_id, team)
+                if old:
+                    captured.append(old)
+                    team_info = TEAMS[team]
+                    z_name = old["name"] or f"Zona #{old['id']}"
+                    try:
+                        await bot.send_message(
+                            chat_id=old["owner_id"],
+                            text=f"⚔️ *Zonangiz egallandi!*\n\n"
+                                 f"🏴 {z_name}\n"
+                                 f"{team_info['emoji']} {db_user['first_name']} tomonidan!\n\n"
+                                 f"Qaytarib oling! 💪",
+                            parse_mode=ParseMode.MARKDOWN,
+                        )
+                    except Exception as e:
+                        logger.warning(f"Capture notif error: {e}")
+
+        await check_and_award(user_id, bot, get_user(user_id))
+
+        te = TEAMS[team]
+        msg += (
+            f"\n✅ *Zona yaratildi #{zone_id}*\n"
+            f"{te['emoji']} {te['name']}\n"
+            f"📐 Maydon: {area/10000:.4f} ga\n"
+        )
+        if captured:
+            msg += f"\n⚔️ *{len(captured)} zona egallandi!*\n"
+            for c in captured:
+                te_c = TEAMS.get(c["team"], {"emoji": "❓"})["emoji"]
+                msg += f"  {te_c} {c['name'] or '#' + str(c['id'])}\n"
+    else:
+        d_close = haversine(
+            points[0]["lat"], points[0]["lng"],
+            points[-1]["lat"], points[-1]["lng"]
+        )
+        msg += (
+            f"\n⚠️ *Trek yopiq emas.*\n"
+            f"Boshlang'ich nuqtaga: {d_close:.0f}m qoldi.\n"
+            f"50m yaqinlashganda yopiq hisoblanadi."
+        )
+
+    return msg
+
+
+# ══════════════════════════════════════════════════════
 # KEYBOARDS
 # ══════════════════════════════════════════════════════
 
@@ -387,7 +497,7 @@ def radius_kb() -> InlineKeyboardMarkup:
     ])
 
 
-# ✅ TUZATILDI: InlineKeyboard → ReplyKeyboard (sendData ishlashi uchun)
+# ✅ ReplyKeyboard — sendData o'rniga fetch ishlatiladi
 def trek_miniapp_kb(team: str = "") -> ReplyKeyboardMarkup:
     trek_url = MINI_APP_URL.rstrip("/") + "/trek.html"
     if team:
@@ -450,7 +560,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                             text=f"👥 *{user.first_name}* sizning havolangiz orqali qo'shildi!",
                             parse_mode="Markdown",
                         )
-                        await check_and_award(referrer_id, ctx.application, get_user(referrer_id))
+                        await check_and_award(referrer_id, ctx.bot, get_user(referrer_id))
                     except Exception:
                         pass
         except (ValueError, IndexError):
@@ -513,13 +623,11 @@ async def cmd_stats(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not db_user:
         await update.message.reply_text("Avval /start bosing!")
         return
-
     zones = get_user_zones(user_id)
     team  = TEAMS.get(db_user["team"] or "", {"emoji": "❓", "name": "Tanlanmagan"})
     total_area = sum(z["area_m2"] for z in zones)
     circles  = sum(1 for z in zones if z["zone_type"] == "circle")
     polygons = sum(1 for z in zones if z["zone_type"] == "polygon")
-
     await update.message.reply_text(
         f"📊 *Statistika*\n\n"
         f"👤 {db_user['first_name']}\n"
@@ -544,7 +652,6 @@ async def cmd_leaderboard(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             SELECT team, SUM(zones_owned) as tz, COUNT(*) as pl
             FROM users WHERE team IS NOT NULL GROUP BY team ORDER BY tz DESC
         """).fetchall()
-
     text = "🏆 *TOP-10 O'yinchilar*\n\n"
     medals = ["🥇","🥈","🥉"]
     for i, r in enumerate(rows, 1):
@@ -552,14 +659,12 @@ async def cmd_leaderboard(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         nm = r["first_name"] or r["username"] or "Nomsiz"
         md = medals[i-1] if i <= 3 else f"{i}."
         text += f"{md} {te} *{nm}*  🗺{r['zones_owned']} ⚔️{r['zones_taken']} 🏃{r['total_km']:.1f}km\n"
-
     if team_rows:
         text += "\n━━━━━━━━\n🎽 *Jamoa reytingi:*\n"
         for r in team_rows:
             if r["team"] in TEAMS:
                 t = TEAMS[r["team"]]
                 text += f"{t['emoji']} {t['name']}: {r['tz'] or 0} zona ({r['pl']} o'yinchi)\n"
-
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=main_menu_kb())
 
 
@@ -572,7 +677,6 @@ async def cmd_zones(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             reply_markup=main_menu_kb(),
         )
         return
-
     text = f"🗺 *Sizning zonalaringiz ({len(zones)} ta)*\n\n"
     for i, z in enumerate(zones, 1):
         tp   = "⭕" if z["zone_type"] == "circle" else "🔷"
@@ -581,7 +685,6 @@ async def cmd_zones(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         ar   = f"{area:.0f}m²" if area < 10000 else f"{area/10000:.2f}ga"
         text += f"{i}. {tp} *{nm}* — {ar}\n"
         text += f"   📅 {z['created_at'][:10]} | /history_{z['id']}\n\n"
-
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=main_menu_kb())
 
 
@@ -592,18 +695,14 @@ async def cmd_history(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     else:
         raw = update.message.text.lstrip("/").replace("history_", "").replace("history", "")
         zone_id_str = raw.strip()
-
     if not zone_id_str.isdigit():
         await update.message.reply_text("Foydalanish: /history [zona_id]")
         return
-
     zone_id = int(zone_id_str)
     history = get_zone_history(zone_id)
-
     if not history:
         await update.message.reply_text(f"Zona #{zone_id} tarixi topilmadi.")
         return
-
     text = f"📜 *Zona #{zone_id} tarixi*\n\n"
     for h in history:
         action = "🆕 Yaratildi" if h["action"] == "created" else "⚔️ Egallandi"
@@ -618,7 +717,6 @@ async def cmd_history(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             from_te = TEAMS.get(h["from_team"], {"emoji": "❓"})["emoji"]
             text   += f"  ← {from_te} {from_nm} dan\n"
         text += "\n"
-
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
 
 
@@ -626,13 +724,11 @@ async def cmd_achievements(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     earned = get_user_achievements(user_id)
     earned_codes = {a["code"] for a in earned}
-
     text = "🏅 *Yutuqlar*\n\n"
     text += f"✅ Qozonilgan: {len(earned)}/{len(ACHIEVEMENTS)}\n\n"
     for code, ach in ACHIEVEMENTS.items():
         mark = "✅" if code in earned_codes else "🔒"
         text += f"{mark} {ach['name']}\n   _{ach['desc']}_\n\n"
-
     await update.message.reply_text(text, parse_mode="Markdown", reply_markup=main_menu_kb())
 
 
@@ -642,11 +738,9 @@ async def cmd_referral(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not db_user:
         await update.message.reply_text("Avval /start bosing!")
         return
-
     bot_info = await ctx.bot.get_me()
     link = get_referral_link(user_id, bot_info.username)
     ref_count = db_user.get("referral_count", 0)
-
     await update.message.reply_text(
         f"👥 *Referral tizimi*\n\n"
         f"🔗 Sizning havola:\n`{link}`\n\n"
@@ -657,21 +751,18 @@ async def cmd_referral(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 # ══════════════════════════════════════════════════════
-# LOCATION HANDLER (faqat doira zona uchun)
+# LOCATION HANDLER
 # ══════════════════════════════════════════════════════
 
 async def handle_location(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     db_user = get_user(user_id)
-
     if not db_user or not db_user["team"]:
         await update.message.reply_text("❗ Avval jamoa tanlang!", reply_markup=team_kb())
         return
-
     lat  = update.message.location.latitude
     lng  = update.message.location.longitude
     mode = ctx.user_data.get("mode", MODE_IDLE)
-
     if mode == MODE_CIRCLE:
         ctx.user_data["circle_lat"] = lat
         ctx.user_data["circle_lng"] = lng
@@ -681,12 +772,10 @@ async def handle_location(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             reply_markup=radius_kb(),
         )
         return
-
     ctx.user_data["last_lat"] = lat
     ctx.user_data["last_lng"] = lng
     nearby = get_zones_near(lat, lng, 500)
     team   = TEAMS[db_user["team"]]
-
     msg = f"📍 *Joylashuv qabul qilindi*\n{team['emoji']} {team['name']}\n"
     if nearby:
         msg += f"\n🔍 *500m ichida {len(nearby)} zona:*\n"
@@ -703,13 +792,8 @@ async def handle_location(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             msg += f"  {tp} {nm_z} — {owner_txt} ({z['distance']:.0f}m)\n"
     else:
         msg += "\n🔍 Yaqin atrofda zona yo'q."
-
     msg += "\n\nZona yaratish uchun:"
-    await update.message.reply_text(
-        msg,
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=zone_create_kb(),
-    )
+    await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN, reply_markup=zone_create_kb())
 
 
 # ══════════════════════════════════════════════════════
@@ -732,7 +816,6 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if not db_user["team"]:
             await update.message.reply_text("❗ Avval jamoa tanlang!", reply_markup=team_kb())
             return
-
         team_info = TEAMS[db_user["team"]]
         await update.message.reply_text(
             f"▶️ *Trek boshlash*\n\n"
@@ -745,28 +828,13 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             parse_mode=ParseMode.MARKDOWN,
             reply_markup=trek_miniapp_kb(db_user["team"]),
         )
-
-    elif text == "🗺 Zonalarim":
-        await cmd_zones(update, ctx)
-
-    elif text == "📊 Statistika":
-        await cmd_stats(update, ctx)
-
-    elif text == "🏆 Reyting":
-        await cmd_leaderboard(update, ctx)
-
-    elif text == "🌍 Xarita":
-        await cmd_map(update, ctx)
-
-    elif text == "🏅 Yutuqlar":
-        await cmd_achievements(update, ctx)
-
-    elif text == "👥 Referral":
-        await cmd_referral(update, ctx)
-
-    elif text == "❓ Yordam":
-        await cmd_help(update, ctx)
-
+    elif text == "🗺 Zonalarim":   await cmd_zones(update, ctx)
+    elif text == "📊 Statistika":  await cmd_stats(update, ctx)
+    elif text == "🏆 Reyting":     await cmd_leaderboard(update, ctx)
+    elif text == "🌍 Xarita":      await cmd_map(update, ctx)
+    elif text == "🏅 Yutuqlar":    await cmd_achievements(update, ctx)
+    elif text == "👥 Referral":    await cmd_referral(update, ctx)
+    elif text == "❓ Yordam":      await cmd_help(update, ctx)
     else:
         await update.message.reply_text(
             "❓ Tushunmadim. Quyidagi tugmalardan foydalaning.",
@@ -775,7 +843,7 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 # ══════════════════════════════════════════════════════
-# WEBAPP DATA HANDLER — trek_finished va onboarding
+# WEBAPP DATA HANDLER (onboarding uchun)
 # ══════════════════════════════════════════════════════
 
 async def handle_webapp_data(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -798,112 +866,18 @@ async def handle_webapp_data(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 [InlineKeyboardButton("🟢 Yashil", callback_data="team:green"),
                  InlineKeyboardButton("🟡 Sariq",  callback_data="team:yellow")],
             ])
-            await update.message.reply_text(
-                "🎽 *Jamoangizni tanlang:*",
-                parse_mode="Markdown",
-                reply_markup=kb,
-            )
+            await update.message.reply_text("🎽 *Jamoangizni tanlang:*", parse_mode="Markdown", reply_markup=kb)
 
+    # trek_finished endi /api/trek_submit orqali keladi (fetch)
+    # Lekin eski sendData ham ishlasa qabul qilamiz
     elif action == "trek_finished":
-        points  = data.get("points", [])
-        team    = data.get("team", "")
-        closed  = data.get("closed", False)
-        dist_m  = data.get("distance", 0)
-
-        if not points or len(points) < 5:
-            await update.message.reply_text(
-                "❗ Trek juda qisqa (kamida 5 nuqta kerak).",
-                reply_markup=main_menu_kb(),
-            )
-            return
-
+        points = data.get("points", [])
+        team   = data.get("team", "")
+        closed = data.get("closed", False)
+        dist_m = data.get("distance", 0)
         upsert_user(user_id, update.effective_user.username or "", update.effective_user.first_name or "")
-        db_user = get_user(user_id)
-
-        if db_user and db_user.get("team"):
-            team = db_user["team"]
-
-        if not team or team not in TEAMS:
-            await update.message.reply_text(
-                "❗ Jamoa tanlanmagan. /start bosing.",
-                reply_markup=main_menu_kb(),
-            )
-            return
-
-        dist_km = dist_m / 1000
-
-        with get_db() as conn:
-            conn.execute(
-                "UPDATE treks SET status='cancelled' WHERE user_id=? AND status='active'",
-                (user_id,)
-            )
-            conn.execute(
-                "INSERT INTO treks (user_id, points, distance_m, started_at, finished_at, status) "
-                "VALUES (?, ?, ?, datetime('now'), datetime('now'), 'finished')",
-                (user_id, json.dumps(points), dist_m)
-            )
-            conn.execute(
-                "UPDATE users SET total_km = total_km + ? WHERE user_id=?",
-                (dist_km, user_id)
-            )
-
-        msg = f"⏹ *Trek yakunlandi!*\n📏 {dist_km:.3f} km | 📍 {len(points)} nuqta\n"
-
-        if closed:
-            zone_id  = await create_zone_polygon_with_photo(update.get_bot(), user_id, team, points)
-            area     = polygon_area_m2(points)
-            captured = []
-
-            for z in get_all_zones():
-                if z["owner_id"] == user_id or z["id"] == zone_id:
-                    continue
-                if zone_is_captured_by_trek(points, z):
-                    old = capture_zone(z["id"], user_id, team)
-                    if old:
-                        captured.append(old)
-                        team_info = TEAMS[team]
-                        z_name    = old["name"] or f"Zona #{old['id']}"
-                        try:
-                            await update.get_bot().send_message(
-                                chat_id=old["owner_id"],
-                                text=f"⚔️ *Zonangiz egallandi!*\n\n"
-                                     f"🏴 {z_name}\n"
-                                     f"{team_info['emoji']} {db_user['first_name']} tomonidan!\n\n"
-                                     f"Qaytarib oling! 💪",
-                                parse_mode=ParseMode.MARKDOWN,
-                            )
-                        except Exception as e:
-                            logger.warning(f"Capture notif error: {e}")
-
-            await check_and_award(user_id, update.get_bot(), get_user(user_id))
-
-            te = TEAMS[team]
-            msg += (
-                f"\n✅ *Zona yaratildi #{zone_id}*\n"
-                f"{te['emoji']} {te['name']}\n"
-                f"📐 Maydon: {area/10000:.4f} ga\n"
-            )
-            if captured:
-                msg += f"\n⚔️ *{len(captured)} zona egallandi!*\n"
-                for c in captured:
-                    te_c = TEAMS.get(c["team"], {"emoji": "❓"})["emoji"]
-                    msg += f"  {te_c} {c['name'] or '#' + str(c['id'])}\n"
-        else:
-            d_close = haversine(
-                points[0]["lat"], points[0]["lng"],
-                points[-1]["lat"], points[-1]["lng"]
-            )
-            msg += (
-                f"\n⚠️ *Trek yopiq emas.*\n"
-                f"Boshlang'ich nuqtaga: {d_close:.0f}m qoldi.\n"
-                f"50m yaqinlashganda yopiq hisoblanadi."
-            )
-
-        await update.message.reply_text(
-            msg,
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=main_menu_kb(),
-        )
+        msg = await process_trek(update.get_bot(), user_id, points, team, closed, dist_m)
+        await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN, reply_markup=main_menu_kb())
 
 
 # ══════════════════════════════════════════════════════
@@ -930,10 +904,7 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     elif data == "zone:circle":
         ctx.user_data["mode"] = MODE_CIRCLE
-        await q.edit_message_text(
-            "⭕ *Doira zona*\n\n📍 Markaz nuqtani yuboring:",
-            parse_mode=ParseMode.MARKDOWN,
-        )
+        await q.edit_message_text("⭕ *Doira zona*\n\n📍 Markaz nuqtani yuboring:", parse_mode=ParseMode.MARKDOWN)
 
     elif data == "zone:cancel":
         ctx.user_data["mode"] = MODE_IDLE
@@ -944,22 +915,18 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         radius  = float(data.split(":")[1])
         lat     = ctx.user_data.get("circle_lat")
         lng     = ctx.user_data.get("circle_lng")
-
         if not lat or not lng:
             await q.edit_message_text("❗ Markaz topilmadi. Qaytadan joylashuv yuboring.")
             return
-
         db_user = get_user(user_id)
         if not db_user or not db_user["team"]:
             await q.edit_message_text("❗ Jamoa tanlanmagan. /start bosing.")
             return
-
         team    = db_user["team"]
         zone_id = await create_zone_circle_with_photo(ctx.bot, user_id, team, lat, lng, radius)
         ctx.user_data["mode"] = MODE_IDLE
         ctx.user_data.pop("circle_lat", None)
         ctx.user_data.pop("circle_lng", None)
-
         te = TEAMS[team]
         await q.edit_message_text(
             f"✅ *Zona yaratildi #{zone_id}*\n\n"
@@ -984,33 +951,25 @@ async def invasion_checker(app):
                 for trek in treks:
                     trek  = dict(trek)
                     pts   = json.loads(trek["points"])
-                    if not pts:
-                        continue
+                    if not pts: continue
                     last  = pts[-1]
                     uid   = trek["user_id"]
                     udata = get_user(uid)
-                    if not udata:
-                        continue
-
+                    if not udata: continue
                     near_zones = get_zones_near(last["lat"], last["lng"], 200)
                     for z in near_zones:
-                        if z["owner_id"] == uid:
-                            continue
+                        if z["owner_id"] == uid: continue
                         key    = f"{z['id']}_{uid}"
                         last_t = notif_cache.get(key)
-                        if last_t and (datetime.now() - last_t).seconds < 3600:
-                            continue
+                        if last_t and (datetime.now() - last_t).seconds < 3600: continue
                         notif_cache[key] = datetime.now()
-
                         te_att = TEAMS.get(udata["team"], {"emoji": "❓"})
                         z_name = z["name"] or f"Zona #{z['id']}"
                         try:
                             await app.bot.send_message(
                                 chat_id=z["owner_id"],
-                                text=f"⚠️ *Zonangizga tajovuz!*\n\n"
-                                     f"🏴 {z_name}\n"
-                                     f"{te_att['emoji']} {udata['first_name']} "
-                                     f"{z['distance']:.0f}m yaqinlashmoqda!\n\n"
+                                text=f"⚠️ *Zonangizga tajovuz!*\n\n🏴 {z_name}\n"
+                                     f"{te_att['emoji']} {udata['first_name']} {z['distance']:.0f}m yaqinlashmoqda!\n\n"
                                      f"Tezroq qaytib himoya qiling! 🏃",
                                 parse_mode=ParseMode.MARKDOWN,
                             )
@@ -1035,11 +994,9 @@ async def expire_old_zones(app):
                     AND z.created_at < datetime('now', ?)
                     AND z.id NOT IN (
                         SELECT DISTINCT zone_id FROM zone_history
-                        WHERE action = 'captured'
-                        AND captured_at > datetime('now', ?)
+                        WHERE action = 'captured' AND captured_at > datetime('now', ?)
                     )
                 """, (f"-{ZONE_EXPIRE_DAYS} days", f"-{ZONE_EXPIRE_DAYS} days")).fetchall()
-
                 for zone in old_zones:
                     zone = dict(zone)
                     conn.execute("UPDATE zones SET owner_id=0, team='neutral' WHERE id=?", (zone["id"],))
@@ -1052,8 +1009,7 @@ async def expire_old_zones(app):
                     try:
                         await app.bot.send_message(
                             chat_id=zone["owner_id"],
-                            text=f"⏱ *Zona eskirdi!*\n\n"
-                                 f"🏴 {zone_name} neytral bo'ldi.\n"
+                            text=f"⏱ *Zona eskirdi!*\n\n🏴 {zone_name} neytral bo'ldi.\n"
                                  f"_{ZONE_EXPIRE_DAYS} kun davomida himoya qilinmadi._\n\n"
                                  f"Zonangizni qayta egallab oling! 🏃",
                             parse_mode="Markdown",
@@ -1070,6 +1026,74 @@ async def expire_old_zones(app):
 # ══════════════════════════════════════════════════════
 
 MINI_APP_PORT = int(os.getenv("PORT", "8080"))
+
+
+async def api_trek_submit(request: web.Request) -> web.Response:
+    """
+    ✅ YANGI ENDPOINT — fetch orqali trek yuborish
+    4096 bayt limit yo'q, xohlagan ko'p nuqta!
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return web.Response(
+            text=json.dumps({"ok": False, "error": "Invalid JSON"}),
+            status=400, content_type="application/json", headers=CORS_HEADERS
+        )
+
+    # tg.initData dan user_id olish
+    init_data = body.get("init_data", "")
+    user_info = parse_init_data(init_data) if init_data else None
+
+    if not user_info:
+        return web.Response(
+            text=json.dumps({"ok": False, "error": "Unauthorized — initData yo'q"}),
+            status=401, content_type="application/json", headers=CORS_HEADERS
+        )
+
+    user_id    = user_info.get("id")
+    first_name = user_info.get("first_name", "")
+    username   = user_info.get("username", "")
+
+    if not user_id:
+        return web.Response(
+            text=json.dumps({"ok": False, "error": "user_id topilmadi"}),
+            status=400, content_type="application/json", headers=CORS_HEADERS
+        )
+
+    # Foydalanuvchini DB ga qo'shish
+    upsert_user(user_id, username, first_name)
+
+    points = body.get("points", [])
+    team   = body.get("team", "")
+    closed = body.get("closed", False)
+    dist_m = body.get("distance", 0)
+
+    logger.info(f"Trek submit: user={user_id} points={len(points)} closed={closed} dist={dist_m:.0f}m")
+
+    # Trek ni ishlash
+    msg = await process_trek(_app.bot, user_id, points, team, closed, dist_m)
+
+    # Foydalanuvchiga bot orqali xabar yuborish
+    try:
+        from telegram import ReplyKeyboardMarkup, KeyboardButton
+        await _app.bot.send_message(
+            chat_id=user_id,
+            text=msg,
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=main_menu_kb(),
+        )
+    except Exception as e:
+        logger.error(f"Bot message error: {e}")
+        return web.Response(
+            text=json.dumps({"ok": False, "error": f"Bot xabar yubora olmadi: {e}"}),
+            status=500, content_type="application/json", headers=CORS_HEADERS
+        )
+
+    return web.Response(
+        text=json.dumps({"ok": True, "message": "Trek qabul qilindi!"}),
+        content_type="application/json", headers=CORS_HEADERS
+    )
 
 
 async def api_zones(request: web.Request) -> web.Response:
@@ -1089,58 +1113,48 @@ async def api_zones(request: web.Request) -> web.Response:
                 "radius_m": z.get("radius_m"), "geometry": geom,
                 "area_m2": z["area_m2"], "created_at": z["created_at"],
             })
-        return web.Response(
-            text=json.dumps(result, ensure_ascii=False),
-            content_type="application/json",
-            headers={"Access-Control-Allow-Origin": "*"},
-        )
+        return web.Response(text=json.dumps(result, ensure_ascii=False),
+                            content_type="application/json", headers=CORS_HEADERS)
     except Exception as e:
-        return web.Response(text=json.dumps({"error": str(e)}), status=500)
+        return web.Response(text=json.dumps({"error": str(e)}), status=500, headers=CORS_HEADERS)
 
 
 async def api_active_treks(request: web.Request) -> web.Response:
     try:
         with get_db() as conn:
             treks = conn.execute("""
-                SELECT t.*, u.first_name, u.team
-                FROM treks t JOIN users u ON t.user_id=u.user_id
-                WHERE t.status='active'
+                SELECT t.*, u.first_name, u.team FROM treks t
+                JOIN users u ON t.user_id=u.user_id WHERE t.status='active'
             """).fetchall()
         result = []
         for t in treks:
             t = dict(t)
             points = json.loads(t["points"])
-            if len(points) < 2:
-                continue
+            if len(points) < 2: continue
             team_info = TEAMS.get(t["team"], {"emoji":"❓"})
             result.append({
                 "user_id": t["user_id"], "owner_name": t["first_name"],
                 "team": t["team"], "team_emoji": team_info["emoji"],
                 "points": points[-100:], "distance_m": t["distance_m"],
             })
-        return web.Response(
-            text=json.dumps(result, ensure_ascii=False),
-            content_type="application/json",
-            headers={"Access-Control-Allow-Origin": "*"},
-        )
+        return web.Response(text=json.dumps(result, ensure_ascii=False),
+                            content_type="application/json", headers=CORS_HEADERS)
     except Exception as e:
-        return web.Response(text=json.dumps({"error": str(e)}), status=500)
+        return web.Response(text=json.dumps({"error": str(e)}), status=500, headers=CORS_HEADERS)
 
 
 async def api_active_players(request: web.Request) -> web.Response:
     try:
         with get_db() as conn:
             treks = conn.execute("""
-                SELECT t.user_id, t.points, u.first_name, u.team
-                FROM treks t JOIN users u ON t.user_id=u.user_id
-                WHERE t.status='active'
+                SELECT t.user_id, t.points, u.first_name, u.team FROM treks t
+                JOIN users u ON t.user_id=u.user_id WHERE t.status='active'
             """).fetchall()
         result = []
         for t in treks:
             t = dict(t)
             points = json.loads(t["points"])
-            if not points:
-                continue
+            if not points: continue
             last = points[-1]
             team_info = TEAMS.get(t["team"], {"emoji":"❓","name":"?"})
             result.append({
@@ -1148,23 +1162,20 @@ async def api_active_players(request: web.Request) -> web.Response:
                 "team": t["team"], "team_emoji": team_info["emoji"],
                 "lat": last["lat"], "lng": last["lng"],
             })
-        return web.Response(
-            text=json.dumps(result, ensure_ascii=False),
-            content_type="application/json",
-            headers={"Access-Control-Allow-Origin": "*"},
-        )
+        return web.Response(text=json.dumps(result, ensure_ascii=False),
+                            content_type="application/json", headers=CORS_HEADERS)
     except Exception as e:
-        return web.Response(text=json.dumps({"error": str(e)}), status=500)
+        return web.Response(text=json.dumps({"error": str(e)}), status=500, headers=CORS_HEADERS)
 
 
 async def api_user(request: web.Request) -> web.Response:
     try:
         user_id = int(request.rel_url.query.get("user_id", 0))
         if not user_id:
-            return web.Response(text=json.dumps({"error": "user_id required"}), status=400)
+            return web.Response(text=json.dumps({"error": "user_id required"}), status=400, headers=CORS_HEADERS)
         db_user = get_user(user_id)
         if not db_user:
-            return web.Response(text=json.dumps({"error": "not found"}), status=404)
+            return web.Response(text=json.dumps({"error": "not found"}), status=404, headers=CORS_HEADERS)
         zones = get_user_zones(user_id)
         team_info = TEAMS.get(db_user["team"], {"emoji": "❓", "name": "Yo'q"})
         result = {
@@ -1176,21 +1187,20 @@ async def api_user(request: web.Request) -> web.Response:
                        "radius_m": z.get("radius_m"), "geometry": json.loads(z["geometry"]),
                        "area_m2": z["area_m2"]} for z in zones],
         }
-        return web.Response(
-            text=json.dumps(result, ensure_ascii=False),
-            content_type="application/json",
-            headers={"Access-Control-Allow-Origin": "*"},
-        )
+        return web.Response(text=json.dumps(result, ensure_ascii=False),
+                            content_type="application/json", headers=CORS_HEADERS)
     except Exception as e:
-        return web.Response(text=json.dumps({"error": str(e)}), status=500)
+        return web.Response(text=json.dumps({"error": str(e)}), status=500, headers=CORS_HEADERS)
 
 
 async def api_health(request: web.Request) -> web.Response:
-    return web.Response(text="OK")
+    return web.Response(text="OK", headers=CORS_HEADERS)
 
 
 async def start_web_server():
-    app_web = web.Application()
+    app_web = web.Application(middlewares=[cors_middleware])
+    app_web.router.add_route("OPTIONS", "/api/trek_submit",    lambda r: web.Response(status=200, headers=CORS_HEADERS))
+    app_web.router.add_post("/api/trek_submit",   api_trek_submit)   # ✅ YANGI
     app_web.router.add_get("/api/zones",          api_zones)
     app_web.router.add_get("/api/user",           api_user)
     app_web.router.add_get("/api/active_treks",   api_active_treks)
@@ -1227,8 +1237,7 @@ ACHIEVEMENTS = {
 def get_user_achievements(user_id: int) -> list:
     with get_db() as conn:
         rows = conn.execute(
-            "SELECT code, earned_at FROM achievements WHERE user_id=? ORDER BY earned_at",
-            (user_id,)
+            "SELECT code, earned_at FROM achievements WHERE user_id=? ORDER BY earned_at", (user_id,)
         ).fetchall()
         return [dict(r) for r in rows]
 
@@ -1242,31 +1251,29 @@ def award_achievement(user_id: int, code: str) -> bool:
         return False
 
 
-async def check_and_award(user_id: int, app, db_user: dict = None):
+async def check_and_award(user_id: int, bot, db_user: dict = None):
     if not db_user:
         db_user = get_user(user_id)
     if not db_user:
         return
-
     checks = [
-        (db_user.get("zones_owned", 0) >= 1,  "first_zone"),
-        (db_user.get("zones_owned", 0) >= 5,  "zone_x5"),
-        (db_user.get("zones_owned", 0) >= 20, "zone_x20"),
-        (db_user.get("zones_taken", 0) >= 1,  "first_capture"),
-        (db_user.get("zones_taken", 0) >= 5,  "capture_x5"),
-        (db_user.get("zones_taken", 0) >= 10, "capture_x10"),
-        (db_user.get("total_km", 0) >= 10,    "km_10"),
-        (db_user.get("total_km", 0) >= 50,    "km_50"),
-        (db_user.get("total_km", 0) >= 100,   "km_100"),
+        (db_user.get("zones_owned", 0) >= 1,    "first_zone"),
+        (db_user.get("zones_owned", 0) >= 5,    "zone_x5"),
+        (db_user.get("zones_owned", 0) >= 20,   "zone_x20"),
+        (db_user.get("zones_taken", 0) >= 1,    "first_capture"),
+        (db_user.get("zones_taken", 0) >= 5,    "capture_x5"),
+        (db_user.get("zones_taken", 0) >= 10,   "capture_x10"),
+        (db_user.get("total_km", 0) >= 10,      "km_10"),
+        (db_user.get("total_km", 0) >= 50,      "km_50"),
+        (db_user.get("total_km", 0) >= 100,     "km_100"),
         (db_user.get("referral_count", 0) >= 1, "referral_1"),
         (db_user.get("referral_count", 0) >= 5, "referral_5"),
     ]
-
     for condition, code in checks:
         if condition and award_achievement(user_id, code):
             ach = ACHIEVEMENTS.get(code, {})
             try:
-                await app.bot.send_message(
+                await bot.send_message(
                     chat_id=user_id,
                     text=f"🏅 *Yangi yutuq!*\n\n{ach.get('name', code)}\n_{ach.get('desc', '')}_",
                     parse_mode="Markdown",
@@ -1300,6 +1307,8 @@ def get_referral_link(user_id: int, bot_username: str) -> str:
 # ══════════════════════════════════════════════════════
 
 async def on_startup(app: Application) -> None:
+    global _app
+    _app = app
     asyncio.create_task(invasion_checker(app))
     asyncio.create_task(expire_old_zones(app))
     asyncio.create_task(start_web_server())
@@ -1307,14 +1316,12 @@ async def on_startup(app: Application) -> None:
 
 def main():
     init_db()
-
     app = (
         Application.builder()
         .token(BOT_TOKEN)
         .post_init(on_startup)
         .build()
     )
-
     app.add_handler(CommandHandler("start",        cmd_start))
     app.add_handler(CommandHandler("help",         cmd_help))
     app.add_handler(CommandHandler("team",         cmd_team))
@@ -1325,12 +1332,10 @@ def main():
     app.add_handler(CommandHandler("map",          cmd_map))
     app.add_handler(CommandHandler("achievements", cmd_achievements))
     app.add_handler(CommandHandler("referral",     cmd_referral))
-
     app.add_handler(MessageHandler(filters.LOCATION, handle_location))
     app.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, handle_webapp_data))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(CallbackQueryHandler(handle_callback))
-
     logger.info("🗺️ Territory Bot ishga tushdi!")
     app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
