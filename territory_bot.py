@@ -36,7 +36,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-BOT_TOKEN    = os.getenv("BOT_TOKEN", "8664008696:AAEy6cuhP0yKKQu1Tp-IEm9FwTWCVRCrYOg")
+BOT_TOKEN    = os.getenv("BOT_TOKEN", "")
 DB_PATH      = os.getenv("DB_PATH", "territory.db")
 MINI_APP_URL = os.getenv("MINI_APP_URL", "https://iyusuf1-lang.github.io/my_territory_tash_bot/")
 
@@ -53,6 +53,9 @@ notif_cache: dict = {}
 
 # Global app reference (trek_submit uchun kerak)
 _app: Application = None
+
+# Tasklar (fon jarayonlari) xotiradan o'chib ketmasligi uchun ro'yxat
+background_tasks = set()
 
 # ══════════════════════════════════════════════════════
 # CORS HEADERS
@@ -1295,6 +1298,7 @@ def apply_referral(new_user_id: int, referrer_id: int) -> bool:
             return False
         conn.execute("UPDATE users SET referred_by=? WHERE user_id=?", (referrer_id, new_user_id))
         conn.execute("UPDATE users SET referral_count = referral_count + 1 WHERE user_id=?", (referrer_id,))
+        conn.commit()  # <--- BAZAGA SAQLASH UCHUN QO'SHILDI
         return True
 
 
@@ -1309,9 +1313,13 @@ def get_referral_link(user_id: int, bot_username: str) -> str:
 async def on_startup(app: Application) -> None:
     global _app
     _app = app
-    asyncio.create_task(invasion_checker(app))
-    asyncio.create_task(expire_old_zones(app))
-    asyncio.create_task(start_web_server())
+    
+    # <--- TASKLAR O'CHIB KETMASLIGI UCHUN SET GA SAQLANDI
+    task1 = asyncio.create_task(invasion_checker(app))
+    task2 = asyncio.create_task(expire_old_zones(app))
+    task3 = asyncio.create_task(start_web_server())
+    
+    background_tasks.update({task1, task2, task3})
 
 
 def main():
