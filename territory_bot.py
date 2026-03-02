@@ -4,7 +4,7 @@
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
 ✅ Trek Mini App orqali (GPS auto-tracking)
 ✅ /api/trek_submit — fetch orqali, limit yo'q!
-✅ HMAC xavfsizlik to'liq sozlangan
+✅ HMAC xavfsizlik TO'G'RILANDI (key tartib fixed)
 ✅ Barcha xatolar tuzatilgan
 """
 
@@ -195,7 +195,6 @@ def get_referral_link(user_id: int, bot_username: str) -> str:
     return f"https://t.me/{bot_username}?start=ref_{user_id}"
 
 def process_referral(new_user_id: int, referrer_id: int):
-    """Yangi foydalanuvchi referral orqali kelganda"""
     if new_user_id == referrer_id:
         return
     with get_db() as conn:
@@ -203,7 +202,7 @@ def process_referral(new_user_id: int, referrer_id: int):
             "SELECT referred_by FROM users WHERE user_id=?", (new_user_id,)
         ).fetchone()
         if existing and existing["referred_by"]:
-            return  # Allaqachon referral bor
+            return
         conn.execute(
             "UPDATE users SET referred_by=? WHERE user_id=?",
             (referrer_id, new_user_id)
@@ -214,11 +213,20 @@ def process_referral(new_user_id: int, referrer_id: int):
         )
 
 # ══════════════════════════════════════════════════════
-# TELEGRAM INIT DATA PARSER (SECURE)
+# ✅ TELEGRAM INIT DATA PARSER — TO'G'RILANDI!
 # ══════════════════════════════════════════════════════
 
 def parse_init_data(init_data: str) -> dict | None:
-    """Telegram WebApp initData ni xavfsiz tekshirish va JSON qaytarish"""
+    """
+    Telegram WebApp initData ni xavfsiz tekshirish.
+    
+    ✅ TO'G'RI HMAC tartib:
+        secret_key = HMAC_SHA256(key=BOT_TOKEN, msg="WebAppData")
+        hash       = HMAC_SHA256(key=secret_key, msg=data_check_string)
+    
+    ❌ NOTO'G'RI (avvalgi):
+        secret_key = HMAC_SHA256(key="WebAppData", msg=BOT_TOKEN)  ← BU XATO EDI!
+    """
     if not init_data:
         logger.error("❌ initData BO'SH keldi!")
         return None
@@ -245,12 +253,18 @@ def parse_init_data(init_data: str) -> dict | None:
             f"{k}={v}" for k, v in sorted(params.items())
         )
 
-        # HMAC tekshirish
+        # ✅ TO'G'RI TARTIB (Telegram docs bo'yicha):
+        #    secret_key = HMAC_SHA256(key=BOT_TOKEN, msg="WebAppData")
         secret_key = hmac.new(
-            b"WebAppData", BOT_TOKEN.encode(), hashlib.sha256
+            BOT_TOKEN.encode(),  # ← key: bot token
+            b"WebAppData",       # ← msg: "WebAppData" string
+            hashlib.sha256
         ).digest()
+
         calc_hash = hmac.new(
-            secret_key, data_check_string.encode(), hashlib.sha256
+            secret_key,
+            data_check_string.encode(),
+            hashlib.sha256
         ).hexdigest()
 
         logger.info(f"🔐 Hash kutilgan:    {hash_val[:16]}...")
@@ -267,6 +281,7 @@ def parse_init_data(init_data: str) -> dict | None:
             logger.error("❌ 'user' maydoni topilmadi!")
             return None
         return json.loads(user_str)
+
     except Exception as e:
         logger.error(f"initData parse xatosi: {e}")
         return None
@@ -302,13 +317,11 @@ def polygon_centroid(points: list) -> tuple:
     return lat, lng
 
 def polygon_area_m2(points: list) -> float:
-    """Shoelace formula orqali polygon maydonini hisoblash"""
     if len(points) < 3:
         return 0
     lat0, lng0 = points[0]["lat"], points[0]["lng"]
     coords = []
     for p in points:
-        # Yo'nalishni saqlash uchun signed masofalar
         dx = haversine(lat0, lng0, lat0, p["lng"])
         if p["lng"] < lng0:
             dx = -dx
@@ -449,7 +462,6 @@ def get_zone_history(zone_id) -> list:
 # ══════════════════════════════════════════════════════
 
 async def check_and_award(user_id: int, bot, db_user: dict):
-    """Yutuqlarni tekshirish va berish"""
     if not db_user:
         return
 
@@ -464,35 +476,27 @@ async def check_and_award(user_id: int, bot, db_user: dict):
                 )
                 awards.append(code)
             except sqlite3.IntegrityError:
-                pass  # Allaqachon bor
+                pass
 
-    # Zona yutuqlari
     if db_user["zones_owned"] >= 1:
         try_award("first_zone")
     if db_user["zones_owned"] >= 3:
         try_award("landlord_3")
     if db_user["zones_owned"] >= 10:
         try_award("landlord_10")
-
-    # Egallash yutuqlari
     if db_user["zones_taken"] >= 5:
         try_award("conqueror_5")
     if db_user["zones_taken"] >= 10:
         try_award("conqueror_10")
-
-    # Yurish yutuqlari
     if db_user["total_km"] >= 1:
         try_award("walker_1km")
     if db_user["total_km"] >= 5:
         try_award("walker_5km")
     if db_user["total_km"] >= 10:
         try_award("walker_10km")
-
-    # Referral yutuqlari
     if db_user["referral_count"] >= 3:
         try_award("referral_3")
 
-    # Yangi yutuqlar haqida xabar berish
     for code in awards:
         ach = ACHIEVEMENT_LIST.get(code)
         if ach:
@@ -574,7 +578,6 @@ async def process_trek(bot, user_id: int, points: list, team: str, closed: bool,
                     except Exception:
                         pass
 
-        # Yangilangan user ma'lumotini olish va yutuqlarni tekshirish
         updated_user = get_user(user_id)
         await check_and_award(user_id, bot, updated_user)
 
@@ -681,7 +684,6 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     upsert_user(user.id, user.username or "", user.first_name or "")
 
-    # Referral tekshirish
     if ctx.args and len(ctx.args) > 0:
         arg = ctx.args[0]
         if arg.startswith("ref_"):
@@ -800,7 +802,6 @@ async def cmd_achievements(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         desc = ach.get("desc", "")
         text += f"{title}\n  _{desc}_\n  📅 {a['earned_at'][:10]}\n\n"
 
-    # Qolgan yutuqlarni ko'rsatish
     earned_codes = {a["code"] for a in user_achs}
     remaining = [v for k, v in ACHIEVEMENT_LIST.items() if k not in earned_codes]
     if remaining:
@@ -900,7 +901,6 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         zone_id = await create_zone_circle_with_photo(ctx.bot, user_id, db_user["team"], lat, lng, radius)
         ctx.user_data["mode"] = MODE_IDLE
 
-        # Yutuqlarni tekshirish
         updated_user = get_user(user_id)
         await check_and_award(user_id, ctx.bot, updated_user)
 
@@ -927,7 +927,6 @@ async def api_trek_submit(request: web.Request) -> web.Response:
             headers=CORS_HEADERS,
         )
 
-    # 1. initData ni xavfsiz tekshirish
     init_data = body.get("init_data", "")
     user_info = parse_init_data(init_data)
 
@@ -972,7 +971,6 @@ async def api_trek_submit(request: web.Request) -> web.Response:
     )
 
 async def api_zones(request: web.Request) -> web.Response:
-    """Barcha zonalarni JSON qaytarish (xarita uchun)"""
     zones = get_all_zones()
     return web.Response(
         text=json.dumps(zones, default=str),
@@ -1023,7 +1021,6 @@ def main():
     init_db()
     app = Application.builder().token(BOT_TOKEN).post_init(on_startup).build()
 
-    # Command handlers
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("team", cmd_team))
@@ -1034,14 +1031,9 @@ def main():
     app.add_handler(CommandHandler("achievements", cmd_achievements))
     app.add_handler(CommandHandler("referral", cmd_referral))
 
-    # /history_123 formatini ushlash
     app.add_handler(MessageHandler(filters.Regex(r"^/history_\d+"), cmd_history))
-
-    # Message handlers
     app.add_handler(MessageHandler(filters.LOCATION, handle_location))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-
-    # Callback handler
     app.add_handler(CallbackQueryHandler(handle_callback))
 
     logger.info("🤖 Bot polling boshlandi...")
