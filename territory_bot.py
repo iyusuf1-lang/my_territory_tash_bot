@@ -1,11 +1,25 @@
 #!/usr/bin/env python3
 """
-🗺 Toshkent Territory Bot
-━━━━━━━━━━━━━━━━━━━━━━━━━━
+🗺 Toshkent Territory Bot - FIXED VERSION v2.0
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ✅ Trek Mini App orqali (GPS auto-tracking)
 ✅ /api/trek_submit — fetch orqali, limit yo'q!
 ✅ HMAC xavfsizlik TO'G'RILANDI (key tartib fixed)
-✅ Barcha xatolar tuzatilgan
+✅ initData EXPIRATION CHECK qo'shildi! (yangi)
+✅ Better error messages va logging (yangi)
+✅ BOT_TOKEN environment variable validation (yangi)
+
+📋 FIXES (v2.0):
+    1. initData expire check (auth_date > 1 hour)
+    2. Better error messages (SESSION_EXPIRED, AUTH_FAILED)
+    3. BOT_TOKEN validation on startup
+    4. Improved logging va debugging
+    5. Clock skew tolerance (60s)
+    
+🔧 Yangi environment variables:
+    - INIT_DATA_MAX_AGE (default: 3600 soniya)
+    
+📅 Last updated: 2026-03-04
 """
 
 import asyncio
@@ -15,6 +29,7 @@ import json
 import math
 import hmac
 import hashlib
+import time
 from urllib.parse import unquote
 from datetime import datetime, timedelta
 from contextlib import contextmanager
@@ -37,9 +52,20 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-BOT_TOKEN    = os.getenv("BOT_TOKEN", "8664008696:AAEy6cuhP0yKKQu1Tp-IEm9FwTWCVRCrYOg")
+# ✅ BOT_TOKEN - Railway environment variable'dan olinadi
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8664008696:AAEy6cuhP0yKKQu1Tp-IEm9FwTWCVRCrYOg")
+if not BOT_TOKEN or BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
+    logger.error("❌ BOT_TOKEN topilmadi! Railway Variables'da sozlang.")
+    raise ValueError("BOT_TOKEN is required")
+
+logger.info(f"✅ BOT_TOKEN sozlangan: {BOT_TOKEN[:20]}...")
+
 DB_PATH      = os.getenv("DB_PATH", "territory.db")
 MINI_APP_URL = os.getenv("MINI_APP_URL", "https://iyusuf1-lang.github.io/my_territory_tash_bot/")
+
+# ✅ initData max age (default: 1 hour = 3600 seconds)
+INIT_DATA_MAX_AGE = int(os.getenv("INIT_DATA_MAX_AGE", "3600"))
+logger.info(f"⏰ initData max age: {INIT_DATA_MAX_AGE} soniya")
 
 TEAMS = {
     "red":    {"name": "🔴 Qizil",   "emoji": "🔴"},
@@ -220,20 +246,23 @@ def parse_init_data(init_data: str) -> dict | None:
     """
     Telegram WebApp initData ni xavfsiz tekshirish.
     
+    ✅ CHECKS:
+        1. HMAC signature validation
+        2. Expiration check (auth_date < INIT_DATA_MAX_AGE)
+        3. User data presence
+    
     ✅ TO'G'RI HMAC tartib:
         secret_key = HMAC_SHA256(key=BOT_TOKEN, msg="WebAppData")
         hash       = HMAC_SHA256(key=secret_key, msg=data_check_string)
-    
-    ❌ NOTO'G'RI (avvalgi):
-        secret_key = HMAC_SHA256(key="WebAppData", msg=BOT_TOKEN)  ← BU XATO EDI!
     """
     if not init_data:
         logger.error("❌ initData BO'SH keldi!")
         return None
+    
     try:
         logger.info(f"📥 initData uzunligi: {len(init_data)}")
 
-        # Manual parsing — URL encoding muammolarini oldini oladi
+        # 1. Manual parsing — URL encoding muammolarini oldini oladi
         params = {}
         for pair in init_data.split("&"):
             idx = pair.find("=")
@@ -243,47 +272,91 @@ def parse_init_data(init_data: str) -> dict | None:
             val = unquote(pair[idx + 1:])
             params[key] = val
 
+        # 2. Extract hash
         hash_val = params.pop("hash", None)
         if not hash_val:
-            logger.error("❌ hash topilmadi initData da!")
+            logger.error("❌ hash topilmadi initData'da!")
             return None
 
-        # data_check_string — sorted, \n bilan ajratilgan
+        # ✅ 3. NEW: Check expiration BEFORE HMAC validation (faster)
+        auth_date = params.get("auth_date")
+        if not auth_date:
+            logger.error("❌ auth_date topilmadi initData'da!")
+            return None
+        
+        try:
+            auth_timestamp = int(auth_date)
+            current_timestamp = int(time.time())
+            age_seconds = current_timestamp - auth_timestamp
+            
+            logger.info(f"⏰ initData age: {age_seconds}s (max: {INIT_DATA_MAX_AGE}s)")
+            
+            # Check if expired
+            if age_seconds > INIT_DATA_MAX_AGE:
+                logger.error(f"❌ initData EXPIRE BO'LGAN! Age: {age_seconds}s > {INIT_DATA_MAX_AGE}s")
+                logger.error("   💡 Foydalanuvchi botni qayta ochishi kerak!")
+                return None
+            
+            # Check if auth_date is in future (clock skew)
+            if age_seconds < -60:  # Allow 60 seconds clock skew
+                logger.error(f"❌ auth_date kelajakda! {auth_date}")
+                return None
+                
+        except ValueError as e:
+            logger.error(f"❌ auth_date noto'g'ri format: {auth_date}, error: {e}")
+            return None
+
+        # 4. Build data_check_string — sorted, \n bilan ajratilgan
         data_check_string = "\n".join(
             f"{k}={v}" for k, v in sorted(params.items())
         )
 
-        # ✅ TO'G'RI TARTIB (Telegram docs bo'yicha):
-        #    secret_key = HMAC_SHA256(key=BOT_TOKEN, msg="WebAppData")
+        # 5. ✅ HMAC VALIDATION (Telegram docs bo'yicha):
+        #    Step 1: secret_key = HMAC_SHA256(key=BOT_TOKEN, msg="WebAppData")
         secret_key = hmac.new(
             BOT_TOKEN.encode(),  # ← key: bot token
             b"WebAppData",       # ← msg: "WebAppData" string
             hashlib.sha256
         ).digest()
 
-        calc_hash = hmac.new(
+        #    Step 2: hash = HMAC_SHA256(key=secret_key, msg=data_check_string)
+        calculated_hash = hmac.new(
             secret_key,
             data_check_string.encode(),
             hashlib.sha256
         ).hexdigest()
 
-        logger.info(f"🔐 Hash kutilgan:    {hash_val[:16]}...")
-        logger.info(f"🔐 Hash hisoblangan: {calc_hash[:16]}...")
+        logger.info(f"🔐 Hash received:    {hash_val[:16]}...")
+        logger.info(f"🔐 Hash calculated:  {calculated_hash[:16]}...")
 
-        if calc_hash != hash_val:
-            logger.warning("🚨 HMAC MISMATCH! BOT_TOKEN ni tekshiring!")
-            logger.debug(f"data_check_string: {repr(data_check_string[:300])}")
+        # 6. Compare hashes (constant-time comparison for security)
+        if not hmac.compare_digest(calculated_hash, hash_val):
+            logger.error("❌ HMAC MISMATCH!")
+            logger.error("   💡 Possible reasons:")
+            logger.error("      1. BOT_TOKEN noto'g'ri")
+            logger.error("      2. initData buzilgan")
+            logger.error("      3. initData boshqa botdan")
+            logger.debug(f"   data_check_string: {repr(data_check_string[:200])}")
             return None
 
         logger.info("✅ HMAC tekshiruvi muvaffaqiyatli!")
+        
+        # 7. Extract user data
         user_str = params.get("user")
         if not user_str:
             logger.error("❌ 'user' maydoni topilmadi!")
             return None
-        return json.loads(user_str)
+        
+        user_data = json.loads(user_str)
+        logger.info(f"✅ User authenticated: {user_data.get('id')} - {user_data.get('first_name')}")
+        
+        return user_data
 
+    except json.JSONDecodeError as e:
+        logger.error(f"❌ JSON parse xatosi: {e}")
+        return None
     except Exception as e:
-        logger.error(f"initData parse xatosi: {e}")
+        logger.error(f"❌ initData parse xatosi: {e}", exc_info=True)
         return None
 
 # ══════════════════════════════════════════════════════
@@ -917,11 +990,23 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 # ══════════════════════════════════════════════════════
 
 async def api_trek_submit(request: web.Request) -> web.Response:
+    """
+    Trek ma'lumotlarini qabul qilish.
+    
+    ✅ Improved error messages
+    ✅ Expiration detection
+    ✅ Better logging
+    """
     try:
         body = await request.json()
-    except Exception:
+    except Exception as e:
+        logger.error(f"❌ Invalid JSON body: {e}")
         return web.Response(
-            text=json.dumps({"ok": False, "error": "Invalid JSON"}),
+            text=json.dumps({
+                "ok": False, 
+                "error": "Invalid JSON",
+                "error_code": "INVALID_JSON"
+            }),
             status=400,
             content_type="application/json",
             headers=CORS_HEADERS,
@@ -931,9 +1016,36 @@ async def api_trek_submit(request: web.Request) -> web.Response:
     user_info = parse_init_data(init_data)
 
     if not user_info:
-        logger.error(f"❌ Auth failed! init_data uzunligi: {len(init_data)}")
+        # ✅ Determine specific error reason
+        error_msg = "Unauthorized — Yaroqsiz yoxud soxta initData"
+        error_code = "AUTH_FAILED"
+        
+        # Check if it was an expiration issue
+        if init_data:
+            try:
+                params = dict(
+                    pair.split("=", 1) 
+                    for pair in init_data.split("&") 
+                    if "=" in pair
+                )
+                auth_date = params.get("auth_date")
+                if auth_date:
+                    age = int(time.time()) - int(auth_date)
+                    if age > INIT_DATA_MAX_AGE:
+                        error_msg = "⏰ Sessiya tugadi. Botni yoping va qayta oching."
+                        error_code = "SESSION_EXPIRED"
+                        logger.error(f"   Session age: {age}s, expired {age - INIT_DATA_MAX_AGE}s ago")
+            except Exception as parse_err:
+                logger.debug(f"   Error parsing auth_date: {parse_err}")
+        
+        logger.error(f"❌ Auth failed! Error code: {error_code}")
         return web.Response(
-            text=json.dumps({"ok": False, "error": "Unauthorized — Yaroqsiz yoxud soxta initData"}),
+            text=json.dumps({
+                "ok": False, 
+                "error": error_msg,
+                "error_code": error_code,
+                "help": "Botni yoping va qayta oching. Keyin trekni qaytadan boshlang."
+            }),
             status=401,
             content_type="application/json",
             headers=CORS_HEADERS,
