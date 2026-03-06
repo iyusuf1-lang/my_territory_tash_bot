@@ -743,7 +743,7 @@ def radius_kb() -> InlineKeyboardMarkup:
     ])
 
 def trek_miniapp_kb(team: str = "") -> ReplyKeyboardMarkup:
-    trek_url = MINI_APP_URL.rstrip("/") + "/trekkki.html"
+    trek_url = MINI_APP_URL.rstrip("/") + "/trek.html"
     if team:
         trek_url += f"?team={team}"
     return ReplyKeyboardMarkup(
