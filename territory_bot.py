@@ -863,15 +863,17 @@ async def cmd_coins(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"🪙 *Territory Coin*\n\n"
         f"💰 Balans: *{coins} coin*\n\n"
         f"📖 *Qoidalar:*\n"
-        f"• 1 km yurish = 10 coin\n"
-        f"• 10 coin = zona +10 health (mustahkamlash)\n"
-        f"• 15 coin = dushman zonasi -10 health (zaiflashtirish)\n\n"
-        f"🛡 *Mustahkamlash:* /strengthen \\[zone\\_id\\] \\[miqdor\\]\n"
-        f"  Misol: `/strengthen 5 50`\n\n"
-        f"⚔️ *Zaiflashtirish:* /weaken \\[zone\\_id\\] \\[miqdor\\]\n"
-        f"  Misol: `/weaken 3 30`\n\n"
-        f"📋 Zonalar ro'yxati: /zones",
-        parse_mode="MarkdownV2",
+        f"1 km yurish = 10 coin\n"
+        f"10 coin = zona +10 health\n"
+        f"15 coin = dushman zonasi -10 health\n\n"
+        f"🛡 *Mustahkamlash:*\n"
+        f"/strengthen [zone\_id] [miqdor]\n"
+        f"Misol: /strengthen 5 50\n\n"
+        f"⚔️ *Zaiflashtirish:*\n"
+        f"/weaken [zone\_id] [miqdor]\n"
+        f"Misol: /weaken 3 30\n\n"
+        f"📋 Zonalar: /zones",
+        parse_mode="Markdown",
     )
 
 async def cmd_strengthen(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
