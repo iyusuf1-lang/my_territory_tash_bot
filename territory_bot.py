@@ -133,6 +133,7 @@ def init_db():
             zones_taken    INTEGER DEFAULT 0,
             referred_by    INTEGER DEFAULT NULL,
             referral_count INTEGER DEFAULT 0,
+            coins          INTEGER DEFAULT 0,
             created_at     TEXT DEFAULT (datetime('now'))
         );
         CREATE TABLE IF NOT EXISTS zones (
@@ -146,6 +147,7 @@ def init_db():
             center_lng  REAL NOT NULL,
             radius_m    REAL,
             area_m2     REAL DEFAULT 0,
+            health      INTEGER DEFAULT 100,
             active      INTEGER DEFAULT 1,
             photo_url   TEXT DEFAULT NULL,
             created_at  TEXT DEFAULT (datetime('now')),
@@ -181,6 +183,21 @@ def init_db():
         """)
         conn.commit()
     logger.info("✅ DB initialized")
+
+def migrate_db():
+    """Mavjud DB ga yangi ustunlar qo'shish (xavfsiz)"""
+    migrations = [
+        "ALTER TABLE users ADD COLUMN coins INTEGER DEFAULT 0",
+        "ALTER TABLE zones ADD COLUMN health INTEGER DEFAULT 100",
+    ]
+    with sqlite3.connect(DB_PATH) as conn:
+        for sql in migrations:
+            try:
+                conn.execute(sql)
+                conn.commit()
+                logger.info(f"✅ Migration: {sql[:50]}")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
 
 @contextmanager
 def get_db():
@@ -620,8 +637,11 @@ async def process_trek(bot, user_id: int, points: list, team: str, closed: bool,
             (user_id, json.dumps(points), dist_m)
         )
         conn.execute("UPDATE users SET total_km = total_km + ? WHERE user_id=?", (dist_km, user_id))
+        # 🪙 Coin tizimi: 1 km = 10 coin
+        coins_earned = max(1, round(dist_km * 10))
+        conn.execute("UPDATE users SET coins = coins + ? WHERE user_id=?", (coins_earned, user_id))
 
-    msg = f"⏹️ *Trek yakunlandi!*\n📏 {dist_km:.3f} km | 📍 {len(points)} nuqta\n"
+    msg = f"⏹️ *Trek yakunlandi!*\n📏 {dist_km:.3f} km | 📍 {len(points)} nuqta\n🪙 +{coins_earned} coin qo'shildi!\n"
 
     if closed:
         zone_id = await create_zone_polygon_with_photo(bot, user_id, team, points)
@@ -689,7 +709,8 @@ def main_menu_kb() -> ReplyKeyboardMarkup:
         [KeyboardButton("▶️ Trek boshlash"), KeyboardButton("🗺 Zonalarim")],
         [KeyboardButton("🌍 Xarita"),        KeyboardButton("📊 Statistika")],
         [KeyboardButton("🏆 Reyting"),       KeyboardButton("🏅 Yutuqlar")],
-        [KeyboardButton("👥 Referral"),      KeyboardButton("❓ Yordam")],
+        [KeyboardButton("🪙 Coinlar"),       KeyboardButton("👥 Referral")],
+        [KeyboardButton("❓ Yordam")],
     ], resize_keyboard=True)
 
 def team_kb() -> InlineKeyboardMarkup:
@@ -722,7 +743,7 @@ def radius_kb() -> InlineKeyboardMarkup:
     ])
 
 def trek_miniapp_kb(team: str = "") -> ReplyKeyboardMarkup:
-    trek_url = MINI_APP_URL.rstrip("/") + "/trek.html"
+    trek_url = MINI_APP_URL.rstrip("/") + "/trekkki.html"
     if team:
         trek_url += f"?team={team}"
     return ReplyKeyboardMarkup(
@@ -794,10 +815,16 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "🎯 *Maqsad:* Toshkent xaritasida hududlarni egallang!\n\n"
         "▶️ *Trek:* \"Trek boshlash\" tugmasini bosib, yuring.\n"
         "Boshlang'ich nuqtaga qaytib kelganingizda zona yaratiladi.\n\n"
+        "🪙 *Coin tizimi:* 1 km yurish = 10 coin\n"
+        "  • /coins — balans va qoidalar\n"
+        "  • /strengthen — o'z zonangizni mustahkamlash\n"
+        "  • /weaken — dushman zonasini zaiflashtirish\n\n"
         "📍 *Doira zona:* Joylashuvni yuboring va radius tanlang.\n\n"
-        "⚔️ *Egallash:* Boshqa o'yinchining zonasi ichidan trek qiling.\n\n"
-        "🏅 *Yutuqlar:* Yuring, zona yarating, do'stlarni taklif qiling!\n\n"
-        "👥 *Referral:* Do'stlaringizni taklif qilib bonus oling."
+        "⚔️ *Egallash:* Boshqa o'yinchining zonasi ichidan trek qiling.\n"
+        "💊 *Zone Health:* Kuchli zonalarni egallash qiyinroq!\n\n"
+        "🏅 *Yutuqlar:* Yuring, zona yarating, do'stlarni taklif qiling!\n"
+        "👥 *Referral:* Do'stlaringizni taklif qilib bonus oling.\n"
+        "🗓 *Haftalik reyting:* /weekly"
     )
     await update.message.reply_text(help_text, parse_mode="Markdown", reply_markup=main_menu_kb())
 
@@ -810,21 +837,185 @@ async def cmd_stats(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not db_user:
         return await update.message.reply_text("❗️ /start bosing.")
     team = TEAMS.get(db_user["team"] or "", {"emoji": "❓", "name": "Tanlanmagan"})
+    coins = db_user.get("coins", 0)
     await update.message.reply_text(
         f"📊 *Statistika*\n\n"
         f"👤 {db_user['first_name']}\n"
         f"{team['emoji']} {team['name']}\n\n"
+        f"🪙 *Coinlar:* {coins} ta\n"
         f"🗺 *Zonalar:* {db_user['zones_owned']} ta\n"
         f"⚔️ *Egallangan:* {db_user['zones_taken']} ta\n"
         f"🏃 *Jami masofa:* {db_user['total_km']:.2f} km\n"
-        f"👥 *Referrallar:* {db_user['referral_count']} ta",
+        f"👥 *Referrallar:* {db_user['referral_count']} ta\n\n"
+        f"💡 1 km yurish = 10 coin\n"
+        f"🛡 /strengthen — zona mustahkamlash\n"
+        f"⚔️ /weaken — dushman zonasini zaiflashtirish",
         parse_mode="Markdown",
     )
+
+async def cmd_coins(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    db_user = get_user(user_id)
+    if not db_user:
+        return await update.message.reply_text("❗️ /start bosing.")
+    coins = db_user.get("coins", 0)
+    await update.message.reply_text(
+        f"🪙 *Territory Coin*\n\n"
+        f"💰 Balans: *{coins} coin*\n\n"
+        f"📖 *Qoidalar:*\n"
+        f"• 1 km yurish = 10 coin\n"
+        f"• 10 coin = zona +10 health (mustahkamlash)\n"
+        f"• 15 coin = dushman zonasi -10 health (zaiflashtirish)\n\n"
+        f"🛡 *Mustahkamlash:* /strengthen \\[zone\\_id\\] \\[miqdor\\]\n"
+        f"  Misol: `/strengthen 5 50`\n\n"
+        f"⚔️ *Zaiflashtirish:* /weaken \\[zone\\_id\\] \\[miqdor\\]\n"
+        f"  Misol: `/weaken 3 30`\n\n"
+        f"📋 Zonalar ro'yxati: /zones",
+        parse_mode="MarkdownV2",
+    )
+
+async def cmd_strengthen(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    db_user = get_user(user_id)
+    if not db_user:
+        return await update.message.reply_text("❗️ /start bosing.")
+
+    args = ctx.args
+    if not args or len(args) < 2:
+        return await update.message.reply_text(
+            "❗️ Format: /strengthen [zone_id] [coin_miqdori]\nMisol: /strengthen 5 50"
+        )
+    try:
+        zone_id = int(args[0])
+        amount = int(args[1])
+    except ValueError:
+        return await update.message.reply_text("❗️ Zone ID va miqdor raqam bo'lishi kerak.")
+
+    if amount < 10:
+        return await update.message.reply_text("❗️ Minimum 10 coin kerak.")
+    if amount % 10 != 0:
+        return await update.message.reply_text("❗️ Miqdor 10 ga karrali bo'lishi kerak (10, 20, 50...).")
+
+    coins = db_user.get("coins", 0)
+    if coins < amount:
+        return await update.message.reply_text(f"❗️ Yetarli coin yo'q. Balans: {coins} coin.")
+
+    with get_db() as conn:
+        zone = conn.execute("SELECT * FROM zones WHERE id=? AND active=1", (zone_id,)).fetchone()
+        if not zone:
+            return await update.message.reply_text(f"❗️ Zona #{zone_id} topilmadi.")
+        zone = dict(zone)
+        if zone["owner_id"] != user_id:
+            return await update.message.reply_text("❗️ Bu zona sizniki emas! Faqat o'z zonangizni mustahkamlay olasiz.")
+
+        health_gain = amount  # 10 coin = +10 health
+        new_health = min(300, zone.get("health", 100) + health_gain)
+        conn.execute("UPDATE zones SET health=? WHERE id=?", (new_health, zone_id))
+        conn.execute("UPDATE users SET coins = coins - ? WHERE user_id=?", (amount, user_id))
+
+    await update.message.reply_text(
+        f"🛡 *Zona mustahkamlandi!*\n\n"
+        f"📍 Zona #{zone_id}\n"
+        f"💊 Health: {zone.get('health', 100)} → {new_health}\n"
+        f"🪙 Sarflandi: {amount} coin\n"
+        f"💰 Qolgan: {coins - amount} coin",
+        parse_mode="Markdown",
+    )
+
+async def cmd_weaken(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    db_user = get_user(user_id)
+    if not db_user:
+        return await update.message.reply_text("❗️ /start bosing.")
+
+    args = ctx.args
+    if not args or len(args) < 2:
+        return await update.message.reply_text(
+            "❗️ Format: /weaken [zone_id] [coin_miqdori]\nMisol: /weaken 3 30"
+        )
+    try:
+        zone_id = int(args[0])
+        amount = int(args[1])
+    except ValueError:
+        return await update.message.reply_text("❗️ Zone ID va miqdor raqam bo'lishi kerak.")
+
+    if amount < 15:
+        return await update.message.reply_text("❗️ Minimum 15 coin kerak.")
+
+    coins = db_user.get("coins", 0)
+    if coins < amount:
+        return await update.message.reply_text(f"❗️ Yetarli coin yo'q. Balans: {coins} coin.")
+
+    with get_db() as conn:
+        zone = conn.execute("SELECT * FROM zones WHERE id=? AND active=1", (zone_id,)).fetchone()
+        if not zone:
+            return await update.message.reply_text(f"❗️ Zona #{zone_id} topilmadi.")
+        zone = dict(zone)
+        if zone["owner_id"] == user_id:
+            return await update.message.reply_text("❗️ O'z zonangizni zaiflatib bo'lmaydi!")
+
+        # 15 coin = -10 health
+        health_loss = (amount // 15) * 10
+        new_health = max(0, zone.get("health", 100) - health_loss)
+        conn.execute("UPDATE zones SET health=? WHERE id=?", (new_health, zone_id))
+        conn.execute("UPDATE users SET coins = coins - ? WHERE user_id=?", (amount, user_id))
+
+        # Zona egasini xabardor qilish
+        try:
+            attacker_team = TEAMS.get(db_user.get("team", ""), {"emoji": "❓"})
+            await ctx.bot.send_message(
+                chat_id=zone["owner_id"],
+                text=(
+                    f"⚠️ *Zonangizga hujum!*\n\n"
+                    f"📍 Zona #{zone_id}\n"
+                    f"{attacker_team['emoji']} {db_user['first_name']} hujum qildi!\n"
+                    f"💊 Health: {zone.get('health', 100)} → {new_health}\n\n"
+                    f"{'🔴 Xavf! Zona zaif!' if new_health < 30 else '💪 Mustahkamlang!'}"
+                ),
+                parse_mode="Markdown",
+            )
+        except Exception:
+            pass
+
+    await update.message.reply_text(
+        f"⚔️ *Hujum muvaffaqiyatli!*\n\n"
+        f"📍 Zona #{zone_id}\n"
+        f"💊 Health: {zone.get('health', 100)} → {new_health}\n"
+        f"🪙 Sarflandi: {amount} coin\n"
+        f"💰 Qolgan: {coins - amount} coin\n\n"
+        f"{'🔴 Zona endi juda zaif!' if new_health < 30 else ''}",
+        parse_mode="Markdown",
+    )
+
+async def cmd_weekly(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Haftalik reyting"""
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT u.first_name, u.team, 
+                   COUNT(t.id) as trek_count,
+                   COALESCE(SUM(t.distance_m)/1000, 0) as week_km
+            FROM users u
+            LEFT JOIN treks t ON t.user_id = u.user_id
+                AND t.finished_at >= datetime('now', '-7 days')
+                AND t.status = 'finished'
+            GROUP BY u.user_id
+            ORDER BY week_km DESC
+            LIMIT 10
+        """).fetchall()
+
+    if not rows:
+        return await update.message.reply_text("📋 Bu hafta hali trek yo'q.")
+
+    text = "🗓 *Haftalik TOP-10*\n_(so'nggi 7 kun)_\n\n"
+    for i, r in enumerate(rows, 1):
+        te = TEAMS[r["team"]]["emoji"] if r["team"] and r["team"] in TEAMS else "❓"
+        text += f"{i}. {te} *{r['first_name']}* — 🏃{r['week_km']:.1f}km ({r['trek_count']} trek)\n"
+    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=main_menu_kb())
 
 async def cmd_leaderboard(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     with get_db() as conn:
         rows = conn.execute(
-            "SELECT first_name, username, team, zones_owned, zones_taken, total_km "
+            "SELECT first_name, username, team, zones_owned, zones_taken, total_km, coins "
             "FROM users ORDER BY zones_owned DESC LIMIT 10"
         ).fetchall()
     if not rows:
@@ -832,7 +1023,9 @@ async def cmd_leaderboard(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     text = "🏆 *TOP-10 O'yinchilar*\n\n"
     for i, r in enumerate(rows, 1):
         te = TEAMS[r["team"]]["emoji"] if r["team"] and r["team"] in TEAMS else "❓"
-        text += f"{i}. {te} *{r['first_name']}*  🗺{r['zones_owned']} ⚔️{r['zones_taken']} 🏃{r['total_km']:.1f}km\n"
+        coins = r["coins"] if r["coins"] else 0
+        text += f"{i}. {te} *{r['first_name']}*  🗺{r['zones_owned']} ⚔️{r['zones_taken']} 🏃{r['total_km']:.1f}km 🪙{coins}\n"
+    text += "\n🗓 /weekly — Haftalik reyting"
     await update.message.reply_text(text, parse_mode="Markdown", reply_markup=main_menu_kb())
 
 async def cmd_zones(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -938,6 +1131,8 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await cmd_map(update, ctx)
     elif text == "🏅 Yutuqlar":
         await cmd_achievements(update, ctx)
+    elif text == "🪙 Coinlar":
+        await cmd_coins(update, ctx)
     elif text == "👥 Referral":
         await cmd_referral(update, ctx)
     elif text == "❓ Yordam":
@@ -1090,6 +1285,106 @@ async def api_zones(request: web.Request) -> web.Response:
         headers=CORS_HEADERS,
     )
 
+async def api_user_me(request: web.Request) -> web.Response:
+    """Foydalanuvchi ma'lumotlari (coins, stats)"""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.Response(text=json.dumps({"ok": False, "error": "Invalid JSON"}), status=400,
+                            content_type="application/json", headers=CORS_HEADERS)
+
+    init_data = body.get("init_data", "")
+    user_info = parse_init_data(init_data)
+    if not user_info:
+        return web.Response(text=json.dumps({"ok": False, "error": "Unauthorized"}), status=401,
+                            content_type="application/json", headers=CORS_HEADERS)
+
+    user_id = user_info.get("id")
+    db_user = get_user(user_id)
+    if not db_user:
+        return web.Response(text=json.dumps({"ok": False, "error": "User not found"}), status=404,
+                            content_type="application/json", headers=CORS_HEADERS)
+
+    return web.Response(
+        text=json.dumps({
+            "ok": True,
+            "coins": db_user.get("coins", 0),
+            "total_km": db_user.get("total_km", 0),
+            "zones_owned": db_user.get("zones_owned", 0),
+            "zones_taken": db_user.get("zones_taken", 0),
+        }),
+        content_type="application/json",
+        headers=CORS_HEADERS,
+    )
+
+async def api_zone_action(request: web.Request) -> web.Response:
+    """Zona kuchlashtirish yoki zaiflashtirish"""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.Response(text=json.dumps({"ok": False, "error": "Invalid JSON"}), status=400,
+                            content_type="application/json", headers=CORS_HEADERS)
+
+    init_data = body.get("init_data", "")
+    user_info = parse_init_data(init_data)
+    if not user_info:
+        return web.Response(text=json.dumps({"ok": False, "error": "Unauthorized", "error_code": "AUTH_FAILED"}),
+                            status=401, content_type="application/json", headers=CORS_HEADERS)
+
+    user_id = user_info.get("id")
+    db_user = get_user(user_id)
+    zone_id = body.get("zone_id")
+    coins_spend = int(body.get("coins", 0))
+    action = body.get("action", "")  # "strengthen" or "weaken"
+
+    if action not in ("strengthen", "weaken"):
+        return web.Response(text=json.dumps({"ok": False, "error": "action must be strengthen or weaken"}),
+                            status=400, content_type="application/json", headers=CORS_HEADERS)
+
+    if coins_spend <= 0:
+        return web.Response(text=json.dumps({"ok": False, "error": "coins must be > 0"}),
+                            status=400, content_type="application/json", headers=CORS_HEADERS)
+
+    user_coins = db_user.get("coins", 0)
+    if user_coins < coins_spend:
+        return web.Response(text=json.dumps({"ok": False, "error": f"Yetarli coin yo'q. Balans: {user_coins}"}),
+                            status=400, content_type="application/json", headers=CORS_HEADERS)
+
+    with get_db() as conn:
+        zone = conn.execute("SELECT * FROM zones WHERE id=? AND active=1", (zone_id,)).fetchone()
+        if not zone:
+            return web.Response(text=json.dumps({"ok": False, "error": "Zona topilmadi"}),
+                                status=404, content_type="application/json", headers=CORS_HEADERS)
+        zone = dict(zone)
+
+        if action == "strengthen":
+            if zone["owner_id"] != user_id:
+                return web.Response(text=json.dumps({"ok": False, "error": "Bu zona sizniki emas!"}),
+                                    status=403, content_type="application/json", headers=CORS_HEADERS)
+            new_health = min(300, zone.get("health", 100) + coins_spend)
+        else:  # weaken
+            if zone["owner_id"] == user_id:
+                return web.Response(text=json.dumps({"ok": False, "error": "O'z zonangizni zaiflatib bo'lmaydi!"}),
+                                    status=403, content_type="application/json", headers=CORS_HEADERS)
+            health_loss = (coins_spend // 15) * 10
+            new_health = max(0, zone.get("health", 100) - health_loss)
+
+        conn.execute("UPDATE zones SET health=? WHERE id=?", (new_health, zone_id))
+        conn.execute("UPDATE users SET coins = coins - ? WHERE user_id=?", (coins_spend, user_id))
+
+    return web.Response(
+        text=json.dumps({
+            "ok": True,
+            "zone_id": zone_id,
+            "old_health": zone.get("health", 100),
+            "new_health": new_health,
+            "coins_spent": coins_spend,
+            "coins_remaining": user_coins - coins_spend,
+        }),
+        content_type="application/json",
+        headers=CORS_HEADERS,
+    )
+
 async def api_health(request: web.Request) -> web.Response:
     return web.Response(text="OK", headers=CORS_HEADERS)
 
@@ -1101,6 +1396,8 @@ async def start_web_server():
     )
     app_web.router.add_post("/api/trek_submit", api_trek_submit)
     app_web.router.add_get("/api/zones", api_zones)
+    app_web.router.add_post("/api/user/me", api_user_me)
+    app_web.router.add_post("/api/zone/action", api_zone_action)
     app_web.router.add_get("/health", api_health)
 
     runner = web.AppRunner(app_web)
@@ -1131,6 +1428,7 @@ def main():
         return
 
     init_db()
+    migrate_db()
     app = Application.builder().token(BOT_TOKEN).post_init(on_startup).build()
 
     app.add_handler(CommandHandler("start", cmd_start))
@@ -1142,6 +1440,10 @@ def main():
     app.add_handler(CommandHandler("map", cmd_map))
     app.add_handler(CommandHandler("achievements", cmd_achievements))
     app.add_handler(CommandHandler("referral", cmd_referral))
+    app.add_handler(CommandHandler("coins", cmd_coins))
+    app.add_handler(CommandHandler("strengthen", cmd_strengthen))
+    app.add_handler(CommandHandler("weaken", cmd_weaken))
+    app.add_handler(CommandHandler("weekly", cmd_weekly))
 
     app.add_handler(MessageHandler(filters.Regex(r"^/history_\d+"), cmd_history))
     app.add_handler(MessageHandler(filters.LOCATION, handle_location))
