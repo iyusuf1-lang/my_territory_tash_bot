@@ -60,7 +60,7 @@ if not BOT_TOKEN or BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
 
 logger.info(f"✅ BOT_TOKEN sozlangan: {BOT_TOKEN[:20]}...")
 
-DB_PATH      = os.getenv("DB_PATH", "territory.db")
+DB_PATH      = os.getenv("DB_PATH", "/data/territory.db")
 MINI_APP_URL = os.getenv("MINI_APP_URL", "https://iyusuf1-lang.github.io/my_territory_tash_bot/")
 
 # ✅ initData max age (default: 1 hour = 3600 seconds)
