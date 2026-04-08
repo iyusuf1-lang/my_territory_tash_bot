@@ -1,0 +1,685 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Territory Tashkent</title>
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#e94560">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Territory">
+<link rel="apple-touch-icon" href="/icons/icon-192.png">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+/* ── RESET ── */
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;overflow:hidden;font-family:-apple-system,'SF Pro Display',sans-serif;background:#0a0e1f}
+
+/* ── MAP ── */
+#map{position:absolute;inset:0;z-index:1}
+
+/* ── OFFLINE BAR ── */
+.offline-bar{
+  position:fixed;top:0;left:0;right:0;
+  background:linear-gradient(90deg,#ff4444,#e94560);
+  color:#fff;text-align:center;font-size:12px;font-weight:700;
+  padding:7px;z-index:10000;display:none;letter-spacing:.04em;
+}
+body.offline .offline-bar{display:block}
+body.offline #topbar{top:29px}
+
+/* ── LOADING ── */
+#loading{
+  position:fixed;inset:0;background:#0a0e1f;
+  display:flex;flex-direction:column;
+  align-items:center;justify-content:center;
+  z-index:9999;gap:16px;
+}
+.spin{
+  width:40px;height:40px;
+  border:3px solid rgba(233,69,96,.2);
+  border-top-color:#e94560;
+  border-radius:50%;animation:spin .7s linear infinite;
+}
+@keyframes spin{to{transform:rotate(360deg)}}
+#loading p{font-size:13px;color:rgba(255,255,255,.5);letter-spacing:.06em}
+
+/* ── TOPBAR ── */
+#topbar{
+  position:absolute;top:0;left:0;right:0;z-index:1000;
+  background:linear-gradient(180deg,rgba(10,14,31,.96) 0%,rgba(10,14,31,.7) 100%);
+  backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+  border-bottom:1px solid rgba(255,255,255,.06);
+  padding:10px 14px;
+  display:flex;align-items:center;justify-content:space-between;
+  gap:10px;
+}
+#topbar-left{display:flex;flex-direction:column;gap:1px}
+#topbar-title{font-size:15px;font-weight:800;color:#e94560;letter-spacing:.02em}
+#topbar-sub{font-size:11px;color:rgba(255,255,255,.45)}
+#topbar-right{display:flex;gap:6px;align-items:center}
+
+.pill{
+  display:flex;align-items:center;gap:4px;
+  background:rgba(255,255,255,.08);
+  border:1px solid rgba(255,255,255,.1);
+  border-radius:20px;padding:5px 10px;
+  font-size:12px;color:#fff;font-weight:700;
+  transition:.15s;
+}
+.pill-gold{background:rgba(255,214,0,.12);border-color:rgba(255,214,0,.25);color:#FFD600}
+
+/* ── LEGEND ── */
+#legend{
+  position:absolute;right:12px;top:70px;z-index:1000;
+  background:rgba(10,14,31,.88);
+  backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+  border:1px solid rgba(255,255,255,.08);
+  border-radius:12px;padding:8px 12px;font-size:11px;color:#fff;
+}
+#legend div{margin:3px 0;display:flex;align-items:center;gap:7px}
+.ldot{width:9px;height:9px;border-radius:50%;flex-shrink:0}
+
+/* ── PLAYERS PANEL ── */
+#players-panel{
+  position:absolute;left:12px;top:70px;z-index:1000;
+  background:rgba(10,14,31,.9);
+  backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+  border:1px solid rgba(255,255,255,.08);
+  border-radius:12px;padding:10px 13px;
+  font-size:11px;color:#fff;min-width:130px;max-width:170px;
+  display:none;
+}
+#players-panel h4{font-size:12px;color:#e94560;margin-bottom:7px;font-weight:700}
+.player-row{margin:3px 0;opacity:.85}
+
+/* ── ZONE INFO POPUP ── */
+#zone-info{
+  position:absolute;bottom:80px;left:12px;right:12px;z-index:1000;
+  background:rgba(10,14,31,.97);
+  border:1px solid rgba(233,69,96,.4);
+  border-radius:18px;padding:14px 16px;
+  display:none;
+  box-shadow:0 8px 32px rgba(0,0,0,.5),0 0 0 1px rgba(233,69,96,.1);
+  animation:slide-up .2s ease;
+}
+@keyframes slide-up{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+#zone-info h3{font-size:14px;color:#fff;margin-bottom:8px;font-weight:700}
+#zone-info p{font-size:12px;color:rgba(255,255,255,.6);margin:3px 0}
+#zone-close{
+  position:absolute;top:10px;right:12px;
+  background:rgba(255,255,255,.08);border:none;color:rgba(255,255,255,.6);
+  width:26px;height:26px;border-radius:50%;
+  font-size:14px;cursor:pointer;display:flex;align-items:center;justify-content:center;
+}
+.health-bar-wrap{margin-top:8px}
+.health-bar-label{font-size:10px;color:rgba(255,255,255,.4);margin-bottom:4px;display:flex;justify-content:space-between}
+.health-bar{height:4px;background:rgba(255,255,255,.1);border-radius:2px;overflow:hidden}
+.health-bar-fill{height:100%;border-radius:2px;transition:.3s}
+
+/* ── BOTTOM NAV ── */
+#bottombar{
+  position:absolute;bottom:0;left:0;right:0;z-index:1000;
+  background:linear-gradient(0deg,rgba(10,14,31,.98) 0%,rgba(10,14,31,.8) 100%);
+  backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+  border-top:1px solid rgba(255,255,255,.06);
+  padding:8px 10px calc(8px + env(safe-area-inset-bottom));
+  display:flex;gap:8px;
+}
+.btn{
+  flex:1;padding:10px 4px;border:none;border-radius:12px;
+  font-size:11px;font-weight:700;cursor:pointer;
+  transition:.15s;display:flex;flex-direction:column;
+  align-items:center;gap:3px;color:#fff;
+}
+.btn:active{transform:scale(.94);opacity:.8}
+.btn-icon{font-size:18px;line-height:1}
+.btn-dark{background:rgba(255,255,255,.09)}
+.btn-red{background:linear-gradient(135deg,#e94560,#c93050);box-shadow:0 3px 12px rgba(233,69,96,.35)}
+.btn-active{background:rgba(46,204,113,.15);border:1px solid rgba(46,204,113,.3);color:#2ecc71}
+.btn-gold{background:rgba(255,214,0,.12);border:1px solid rgba(255,214,0,.25);color:#FFD600}
+
+/* ── LEADERBOARD SHEET ── */
+#lb-sheet{
+  position:fixed;inset:0;z-index:2000;
+  display:none;
+}
+#lb-sheet.show{display:block}
+#lb-backdrop{
+  position:absolute;inset:0;
+  background:rgba(0,0,0,.6);
+  backdrop-filter:blur(4px);
+}
+#lb-panel{
+  position:absolute;bottom:0;left:0;right:0;
+  background:#0f1428;
+  border-radius:22px 22px 0 0;
+  border-top:1px solid rgba(255,255,255,.08);
+  padding:0 0 calc(20px + env(safe-area-inset-bottom));
+  max-height:80vh;overflow-y:auto;
+  animation:sheet-up .3s cubic-bezier(.34,1.56,.64,1);
+}
+@keyframes sheet-up{from{transform:translateY(100%)}to{transform:translateY(0)}}
+.lb-handle{width:36px;height:4px;background:rgba(255,255,255,.15);border-radius:2px;margin:12px auto 16px}
+.lb-title{text-align:center;font-size:16px;font-weight:800;color:#fff;margin-bottom:4px}
+.lb-subtitle{text-align:center;font-size:12px;color:rgba(255,255,255,.4);margin-bottom:16px}
+.lb-row{
+  display:flex;align-items:center;gap:12px;
+  padding:11px 18px;border-bottom:1px solid rgba(255,255,255,.04);
+}
+.lb-rank{
+  width:28px;text-align:center;font-size:13px;font-weight:800;
+  color:rgba(255,255,255,.3);font-family:monospace;
+}
+.lb-rank.top1{color:#FFD600;font-size:16px}
+.lb-rank.top2{color:#C0C0C0;font-size:15px}
+.lb-rank.top3{color:#CD7F32;font-size:14px}
+.lb-avatar{
+  width:36px;height:36px;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+  font-size:16px;flex-shrink:0;border:2px solid transparent;
+}
+.lb-info{flex:1}
+.lb-name{font-size:13px;font-weight:700;color:#fff}
+.lb-detail{font-size:11px;color:rgba(255,255,255,.4);margin-top:1px}
+.lb-score{text-align:right}
+.lb-zones{font-size:14px;font-weight:800;color:#e94560}
+.lb-km{font-size:10px;color:rgba(255,255,255,.35);margin-top:1px}
+.lb-loading{padding:40px;text-align:center;color:rgba(255,255,255,.3);font-size:13px}
+.lb-tabs{display:flex;margin:0 16px 12px;background:rgba(255,255,255,.06);border-radius:10px;padding:3px;gap:3px}
+.lb-tab{
+  flex:1;padding:7px;border:none;border-radius:8px;
+  font-size:12px;font-weight:700;cursor:pointer;color:rgba(255,255,255,.5);
+  background:transparent;transition:.15s;
+}
+.lb-tab.active{background:rgba(233,69,96,.9);color:#fff}
+
+/* ── MY LOCATION DOT ── */
+.my-dot{
+  width:14px;height:14px;background:#e94560;
+  border:3px solid #fff;border-radius:50%;
+  box-shadow:0 0 0 0 rgba(233,69,96,.5);
+  animation:pulse-ring 1.5s infinite;
+}
+@keyframes pulse-ring{
+  0%{box-shadow:0 0 0 0 rgba(233,69,96,.5)}
+  70%{box-shadow:0 0 0 10px rgba(233,69,96,0)}
+  100%{box-shadow:0 0 0 0 rgba(233,69,96,0)}
+}
+.other-dot{width:12px;height:12px;border:2px solid #fff;border-radius:50%}
+
+/* ── PWA INSTALL BANNER ── */
+#pwa-banner{
+  position:fixed;bottom:0;left:0;right:0;
+  background:linear-gradient(135deg,#16213e,#0d0d1a);
+  border-top:1px solid rgba(233,69,96,.3);
+  padding:12px 14px;
+  display:flex;align-items:center;gap:10px;
+  z-index:9998;
+  transform:translateY(100%);
+  transition:transform .4s cubic-bezier(.34,1.56,.64,1);
+  box-shadow:0 -8px 32px rgba(0,0,0,.5);
+}
+#pwa-banner.show{transform:translateY(0)}
+.pwa-icon{width:44px;height:44px;background:rgba(233,69,96,.15);border:1px solid rgba(233,69,96,.3);border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:22px;flex-shrink:0}
+.pwa-text{flex:1}
+.pwa-text strong{display:block;color:#fff;font-size:13px;margin-bottom:2px}
+.pwa-text span{color:rgba(200,214,229,.55);font-size:11px}
+.pwa-install{background:#e94560;color:#fff;border:none;padding:8px 14px;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap}
+.pwa-close{background:none;border:none;color:rgba(200,214,229,.4);font-size:18px;cursor:pointer;padding:4px}
+
+/* ── TOAST ── */
+#toast{
+  position:fixed;bottom:90px;left:50%;transform:translateX(-50%) translateY(20px);
+  background:rgba(15,20,40,.95);border:1px solid rgba(255,255,255,.12);
+  color:#fff;padding:9px 18px;border-radius:20px;font-size:13px;font-weight:600;
+  z-index:5000;opacity:0;transition:.3s;white-space:nowrap;
+  pointer-events:none;backdrop-filter:blur(8px);
+}
+#toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+</style>
+</head>
+<body>
+
+<div class="offline-bar">📡 Internet yo'q — kesh ma'lumotlar ko'rsatilmoqda</div>
+
+<div id="loading">
+  <div class="spin"></div>
+  <p>YUKLANMOQDA...</p>
+</div>
+
+<div id="map"></div>
+
+<!-- TOP BAR -->
+<div id="topbar">
+  <div id="topbar-left">
+    <div id="topbar-title">🗺 Territory Tashkent</div>
+    <div id="topbar-sub">Yuklanmoqda...</div>
+  </div>
+  <div id="topbar-right">
+    <div class="pill pill-gold">🪙 <span id="s-coins">0</span></div>
+    <div class="pill">🏴 <span id="s-zones">0</span></div>
+    <div class="pill">🏃 <span id="s-km">0</span>km</div>
+  </div>
+</div>
+
+<!-- LEGEND -->
+<div id="legend">
+  <div><span class="ldot" style="background:#e74c3c"></span> Qizil</div>
+  <div><span class="ldot" style="background:#3498db"></span> Ko'k</div>
+  <div><span class="ldot" style="background:#2ecc71"></span> Yashil</div>
+  <div><span class="ldot" style="background:#f39c12"></span> Sariq</div>
+  <div><span class="ldot" style="background:#888"></span> Neytral</div>
+</div>
+
+<!-- PLAYERS PANEL -->
+<div id="players-panel">
+  <h4>👥 Faol o'yinchilar</h4>
+  <div id="players-list"></div>
+</div>
+
+<!-- ZONE INFO POPUP -->
+<div id="zone-info">
+  <button id="zone-close" onclick="closeZoneInfo()">✕</button>
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+    <div id="zi-photo" style="width:44px;height:44px;border-radius:50%;overflow:hidden;flex-shrink:0;border:2px solid #e94560"></div>
+    <div>
+      <h3 id="zi-title" style="margin:0"></h3>
+      <p id="zi-owner" style="margin:2px 0;font-size:12px;color:rgba(255,255,255,.5)"></p>
+    </div>
+  </div>
+  <p id="zi-team"></p>
+  <p id="zi-area"></p>
+  <p id="zi-date"></p>
+  <div class="health-bar-wrap" id="zi-health-wrap">
+    <div class="health-bar-label">
+      <span>💊 Zona sog'ligi</span>
+      <span id="zi-health-val">100</span>
+    </div>
+    <div class="health-bar">
+      <div class="health-bar-fill" id="zi-health-bar" style="width:100%;background:#2ecc71"></div>
+    </div>
+  </div>
+</div>
+
+<!-- BOTTOM NAV -->
+<div id="bottombar">
+  <button class="btn btn-dark" onclick="centerMe()">
+    <span class="btn-icon">📍</span>Men
+  </button>
+  <button class="btn btn-dark" id="btn-players" onclick="togglePlayers()">
+    <span class="btn-icon">👥</span>O'yinchilar
+  </button>
+  <button class="btn btn-dark" id="btn-mine" onclick="toggleMine()">
+    <span class="btn-icon">🏴</span>Menikilar
+  </button>
+  <button class="btn btn-gold" onclick="openLeaderboard()">
+    <span class="btn-icon">🏆</span>Reyting
+  </button>
+  <button class="btn btn-red" onclick="refresh()">
+    <span class="btn-icon">🔄</span>Yangi
+  </button>
+</div>
+
+<!-- LEADERBOARD SHEET -->
+<div id="lb-sheet">
+  <div id="lb-backdrop" onclick="closeLeaderboard()"></div>
+  <div id="lb-panel">
+    <div class="lb-handle"></div>
+    <div class="lb-title">🏆 Reyting jadvali</div>
+    <div class="lb-subtitle">Haftalik natijalar</div>
+    <div class="lb-tabs">
+      <button class="lb-tab active" onclick="switchTab('zones',this)">🏴 Zonalar</button>
+      <button class="lb-tab" onclick="switchTab('km',this)">🏃 KM</button>
+      <button class="lb-tab" onclick="switchTab('coins',this)">🪙 Coinlar</button>
+    </div>
+    <div id="lb-content"><div class="lb-loading">⏳ Yuklanmoqda...</div></div>
+  </div>
+</div>
+
+<!-- PWA INSTALL BANNER -->
+<div id="pwa-banner">
+  <div class="pwa-icon">🗺</div>
+  <div class="pwa-text">
+    <strong>Ilovani o'rnating</strong>
+    <span>Offline ishlaydi · Tezroq · Ikonka</span>
+  </div>
+  <button class="pwa-install" id="pwa-install-btn">O'rnatish</button>
+  <button class="pwa-close" id="pwa-close-btn">✕</button>
+</div>
+
+<!-- TOAST -->
+<div id="toast"></div>
+
+<script>
+// ══ CONFIG ══
+const API = "https://myterritorytashbot-production.up.railway.app";
+const REFRESH_MS = 15000;
+const COLORS = {
+  red:     {fill:"#e74c3c",line:"#c0392b"},
+  blue:    {fill:"#3498db",line:"#2980b9"},
+  green:   {fill:"#2ecc71",line:"#27ae60"},
+  yellow:  {fill:"#f39c12",line:"#d68910"},
+  neutral: {fill:"#888",   line:"#666"},
+};
+
+// ══ INIT ══
+const tg = window.Telegram?.WebApp;
+tg?.ready(); tg?.expand();
+const ME = tg?.initDataUnsafe?.user?.id || null;
+
+const map = L.map("map",{center:[41.3111,69.2799],zoom:13,zoomControl:false});
+L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",{
+  maxZoom:19,attribution:"© CartoDB"
+}).addTo(map);
+L.control.zoom({position:"topright"}).addTo(map);
+
+const zonesLayer   = L.layerGroup().addTo(map);
+const treksLayer   = L.layerGroup().addTo(map);
+const playersLayer = L.layerGroup().addTo(map);
+
+let myMarker=null, myLat=null, myLng=null;
+let showMine=false, showPlayers=true;
+let allZones=[], allTreks=[], allPlayers=[];
+let lbCurrentTab = "zones";
+let lbData = null;
+
+// ══ LOCATION ══
+function startLocation(){
+  if(!navigator.geolocation) return;
+  navigator.geolocation.watchPosition(pos=>{
+    myLat=pos.coords.latitude; myLng=pos.coords.longitude;
+    const icon=L.divIcon({className:"",iconSize:[14,14],iconAnchor:[7,7],
+      html:`<div class="my-dot"></div>`});
+    if(myMarker) myMarker.setLatLng([myLat,myLng]);
+    else{
+      myMarker=L.marker([myLat,myLng],{icon,zIndexOffset:1000})
+        .addTo(map).bindPopup("📍 Siz");
+      map.setView([myLat,myLng],15);
+    }
+  },null,{enableHighAccuracy:true,maximumAge:3000});
+}
+
+// ══ DATA ══
+async function loadZones(){
+  try{const r=await fetch(`${API}/api/zones`);allZones=await r.json();}
+  catch(e){console.error("zones:",e);}
+}
+async function loadTreks(){
+  try{const r=await fetch(`${API}/api/active_treks`);if(r.ok)allTreks=await r.json();}
+  catch(e){}
+}
+async function loadPlayers(){
+  try{const r=await fetch(`${API}/api/active_players`);if(r.ok)allPlayers=await r.json();}
+  catch(e){}
+}
+async function loadUserInfo(){
+  if(!ME) return;
+  try{
+    const r=await fetch(`${API}/api/user?user_id=${ME}`);
+    if(!r.ok) return;
+    const u=await r.json();
+    document.getElementById("topbar-sub").textContent=
+      `${u.team_emoji||"❓"} ${u.team_name||"Jamoa yo'q"}`;
+    document.getElementById("s-zones").textContent=u.zones_owned||0;
+    document.getElementById("s-km").textContent=(u.total_km||0).toFixed(1);
+    document.getElementById("s-coins").textContent=u.coins||0;
+  }catch(e){}
+}
+
+// ══ RENDER ZONES ══
+function renderZones(){
+  zonesLayer.clearLayers();
+  const list=showMine?allZones.filter(z=>String(z.owner_id)===String(ME)):allZones;
+  list.forEach(zone=>{
+    const c=COLORS[zone.team]||COLORS.neutral;
+    const health=zone.health||100;
+    const healthOpacity=0.15+Math.min(health,200)/200*0.25;
+    const style={color:c.line,fillColor:c.fill,fillOpacity:healthOpacity,weight:health>150?3:2};
+    let layer;
+    if(zone.type==="circle"){
+      layer=L.circle([zone.center_lat,zone.center_lng],{radius:zone.radius_m||50,...style});
+    } else {
+      const geom=Array.isArray(zone.geometry)?zone.geometry:[];
+      if(geom.length>=3) layer=L.polygon(geom.map(p=>[p.lat,p.lng]),style);
+    }
+    if(!layer) return;
+    layer.on("click",()=>showZoneInfo(zone));
+    layer.addTo(zonesLayer);
+    // Icon marker
+    const iSize=zone.type==="circle"?Math.max(24,Math.min(zone.radius_m||50,50))*.6:32;
+    const iconHtml=zone.photo_url
+      ?`<div style="width:${iSize}px;height:${iSize}px;border-radius:50%;border:2px solid ${c.line};overflow:hidden;box-shadow:0 0 8px ${c.fill}88;pointer-events:none"><img src="${zone.photo_url}" style="width:100%;height:100%;object-fit:cover" onerror="this.parentElement.innerHTML='<div style=\'width:100%;height:100%;background:${c.fill};display:flex;align-items:center;justify-content:center;font-size:12px;color:#fff\'>${zone.team_emoji||"?"}</div>'" /></div>`
+      :`<div style="background:${c.fill};color:#fff;width:${iSize}px;height:${iSize}px;border-radius:50%;border:2px solid ${c.line};display:flex;align-items:center;justify-content:center;font-size:${iSize*.45}px;box-shadow:0 0 8px ${c.fill}88;pointer-events:none">${zone.team_emoji||"?"}</div>`;
+    L.marker([zone.center_lat,zone.center_lng],{
+      icon:L.divIcon({className:"",html:iconHtml,iconSize:[iSize,iSize],iconAnchor:[iSize/2,iSize/2]}),
+      zIndexOffset:100,
+    }).on("click",()=>showZoneInfo(zone)).addTo(zonesLayer);
+  });
+}
+
+function renderTreks(){
+  treksLayer.clearLayers();
+  allTreks.forEach(trek=>{
+    if(!trek.points||trek.points.length<2) return;
+    const c=COLORS[trek.team]||COLORS.neutral;
+    const latlngs=trek.points.map(p=>[p.lat,p.lng]);
+    L.polyline(latlngs,{color:c.fill,weight:3,opacity:.85,dashArray:"6,4"}).addTo(treksLayer);
+    L.circleMarker(latlngs[0],{radius:5,color:c.line,fillColor:c.fill,fillOpacity:1,weight:2}).addTo(treksLayer);
+    const last=latlngs[latlngs.length-1];
+    L.circleMarker(last,{radius:6,color:"#fff",fillColor:c.fill,fillOpacity:1,weight:2})
+      .bindPopup(`${trek.owner_name||"?"} yurmoqda`).addTo(treksLayer);
+  });
+}
+
+function renderPlayers(){
+  playersLayer.clearLayers();
+  document.getElementById("players-list").innerHTML="";
+  allPlayers.forEach(p=>{
+    if(String(p.user_id)===String(ME)) return;
+    if(!p.lat||!p.lng) return;
+    const c=COLORS[p.team]||COLORS.neutral;
+    const icon=L.divIcon({className:"",iconSize:[12,12],iconAnchor:[6,6],
+      html:`<div class="other-dot" style="background:${c.fill}"></div>`});
+    L.marker([p.lat,p.lng],{icon}).bindPopup(`${p.team_emoji||"❓"} ${p.name||"O'yinchi"}`).addTo(playersLayer);
+    const row=document.createElement("div");
+    row.className="player-row";
+    row.textContent=`${p.team_emoji||"❓"} ${p.name||"?"}`;
+    document.getElementById("players-list").appendChild(row);
+  });
+}
+
+// ══ ZONE INFO ══
+function showZoneInfo(zone){
+  const c=COLORS[zone.team]||COLORS.neutral;
+  document.getElementById("zi-title").textContent=`${zone.team_emoji||""} Zona #${zone.id}`;
+  document.getElementById("zi-owner").textContent=`👤 ${zone.owner_name||"Neytral"}`;
+  document.getElementById("zi-team").textContent =`🎽 ${zone.team_name||""}`;
+  const a=zone.area_m2||0;
+  document.getElementById("zi-area").textContent =`📐 ${a<10000?a.toFixed(0)+"m²":(a/10000).toFixed(2)+"ga"}`;
+  document.getElementById("zi-date").textContent =`📅 ${(zone.created_at||"").substring(0,10)}`;
+  // Photo
+  const photoDiv=document.getElementById("zi-photo");
+  photoDiv.style.borderColor=c.line;
+  photoDiv.innerHTML=zone.photo_url
+    ?`<img src="${zone.photo_url}" style="width:100%;height:100%;object-fit:cover" onerror="this.parentElement.innerHTML='<div style=\'width:100%;height:100%;background:${c.fill};display:flex;align-items:center;justify-content:center;font-size:20px\'>${zone.team_emoji||"?"}</div>'" />`
+    :`<div style="width:100%;height:100%;background:${c.fill};display:flex;align-items:center;justify-content:center;font-size:22px">${zone.team_emoji||"?"}</div>`;
+  // Health bar
+  const health=zone.health||100;
+  const maxHealth=300;
+  const pct=Math.min(100,(health/maxHealth)*100);
+  const hColor=pct>60?"#2ecc71":pct>30?"#f39c12":"#e74c3c";
+  document.getElementById("zi-health-val").textContent=health;
+  document.getElementById("zi-health-bar").style.cssText=`width:${pct}%;background:${hColor}`;
+  document.getElementById("zone-info").style.display="block";
+}
+
+function closeZoneInfo(){
+  document.getElementById("zone-info").style.display="none";
+}
+
+// ══ LEADERBOARD ══
+async function openLeaderboard(){
+  document.getElementById("lb-sheet").classList.add("show");
+  if(!lbData) await fetchLeaderboard();
+  renderLeaderboard();
+}
+
+function closeLeaderboard(){
+  document.getElementById("lb-sheet").classList.remove("show");
+}
+
+async function fetchLeaderboard(){
+  try{
+    const r=await fetch(`${API}/api/leaderboard`);
+    if(r.ok) lbData=await r.json();
+  } catch(e){ lbData=null; }
+}
+
+function switchTab(tab, el){
+  lbCurrentTab=tab;
+  document.querySelectorAll(".lb-tab").forEach(t=>t.classList.remove("active"));
+  el.classList.add("active");
+  renderLeaderboard();
+}
+
+function renderLeaderboard(){
+  const el=document.getElementById("lb-content");
+  if(!lbData||!lbData.length){
+    el.innerHTML=`<div class="lb-loading">Ma'lumot yo'q yoki API ulangan emas</div>`;
+    return;
+  }
+  const TEAM_COLORS={red:"#e74c3c",blue:"#3498db",green:"#2ecc71",yellow:"#f39c12",neutral:"#888"};
+  let sorted=[...lbData];
+  if(lbCurrentTab==="km") sorted.sort((a,b)=>(b.total_km||0)-(a.total_km||0));
+  else if(lbCurrentTab==="coins") sorted.sort((a,b)=>(b.coins||0)-(a.coins||0));
+  else sorted.sort((a,b)=>(b.zones_owned||0)-(a.zones_owned||0));
+  el.innerHTML=sorted.slice(0,20).map((u,i)=>{
+    const rank=i+1;
+    const rankClass=rank===1?"top1":rank===2?"top2":rank===3?"top3":"";
+    const rankIcon=rank===1?"🥇":rank===2?"🥈":rank===3?"🥉":rank;
+    const tc=TEAM_COLORS[u.team]||"#888";
+    const score=lbCurrentTab==="km"?(u.total_km||0).toFixed(1)+" km"
+      :lbCurrentTab==="coins"?(u.coins||0)+" 🪙"
+      :(u.zones_owned||0)+" zona";
+    const isME=String(u.user_id)===String(ME);
+    return `<div class="lb-row" style="${isME?"background:rgba(233,69,96,.08);":""}">
+      <div class="lb-rank ${rankClass}">${rankIcon}</div>
+      <div class="lb-avatar" style="background:${tc}22;border-color:${tc}44">
+        ${u.team_emoji||"❓"}
+      </div>
+      <div class="lb-info">
+        <div class="lb-name">${u.name||"Anonim"}${isME?" 👈":""}</div>
+        <div class="lb-detail">${u.team_name||"Jamoa yo'q"}</div>
+      </div>
+      <div class="lb-score">
+        <div class="lb-zones">${score}</div>
+      </div>
+    </div>`;
+  }).join("");
+}
+
+// ══ BUTTONS ══
+function centerMe(){
+  if(myLat&&myLng) map.setView([myLat,myLng],16);
+  else showToast("📍 Joylashuv aniqlanmagan");
+}
+
+function toggleMine(){
+  showMine=!showMine;
+  const btn=document.getElementById("btn-mine");
+  btn.innerHTML=showMine
+    ?`<span class="btn-icon">🌍</span>Hammasi`
+    :`<span class="btn-icon">🏴</span>Menikilar`;
+  btn.className=showMine?"btn btn-active":"btn btn-dark";
+  renderZones();
+}
+
+function togglePlayers(){
+  showPlayers=!showPlayers;
+  const btn=document.getElementById("btn-players");
+  btn.innerHTML=showPlayers
+    ?`<span class="btn-icon">👁</span>Yashir`
+    :`<span class="btn-icon">👥</span>O'yinchilar`;
+  btn.className=showPlayers?"btn btn-active":"btn btn-dark";
+  document.getElementById("players-panel").style.display=showPlayers?"block":"none";
+  if(showPlayers) renderPlayers(); else playersLayer.clearLayers();
+}
+
+async function refresh(){
+  const btn=document.querySelector('.btn-red');
+  btn.innerHTML=`<span class="btn-icon">⏳</span>Yangi`;
+  await Promise.all([loadZones(),loadTreks(),loadPlayers(),loadUserInfo()]);
+  renderZones(); renderTreks(); renderPlayers();
+  btn.innerHTML=`<span class="btn-icon">🔄</span>Yangi`;
+  showToast("✅ Yangilandi!");
+}
+
+// ══ TOAST ══
+function showToast(msg,dur=2000){
+  const t=document.getElementById("toast");
+  t.textContent=msg; t.classList.add("show");
+  setTimeout(()=>t.classList.remove("show"),dur);
+}
+
+// ══ MAIN INIT ══
+async function init(){
+  startLocation();
+  await Promise.all([loadZones(),loadTreks(),loadPlayers(),loadUserInfo()]);
+  renderZones(); renderTreks(); renderPlayers();
+  document.getElementById("loading").style.display="none";
+  setInterval(async()=>{
+    await Promise.all([loadZones(),loadTreks(),loadPlayers()]);
+    renderZones(); renderTreks(); renderPlayers();
+  },REFRESH_MS);
+}
+init();
+
+// ══ PWA ══
+if('serviceWorker' in navigator){
+  window.addEventListener('load',()=>{
+    navigator.serviceWorker.register('/sw.js')
+      .then(r=>console.log('[PWA] SW:',r.scope))
+      .catch(e=>console.warn('[PWA] SW err:',e));
+  });
+}
+
+let deferredPrompt=null;
+const banner=document.getElementById('pwa-banner');
+window.addEventListener('beforeinstallprompt',e=>{
+  e.preventDefault(); deferredPrompt=e;
+  if(!window.Telegram?.WebApp?.initData){
+    setTimeout(()=>{ if(!localStorage.getItem('pwa-dismissed')) banner.classList.add('show'); },4000);
+  }
+});
+document.getElementById('pwa-install-btn').addEventListener('click',async()=>{
+  if(!deferredPrompt) return;
+  deferredPrompt.prompt();
+  await deferredPrompt.userChoice;
+  deferredPrompt=null; banner.classList.remove('show');
+});
+document.getElementById('pwa-close-btn').addEventListener('click',()=>{
+  banner.classList.remove('show');
+  localStorage.setItem('pwa-dismissed','1');
+});
+window.addEventListener('appinstalled',()=>banner.classList.remove('show'));
+
+// Online/Offline
+function updateNet(){ document.body.classList.toggle('offline',!navigator.onLine); }
+window.addEventListener('online',updateNet);
+window.addEventListener('offline',updateNet);
+updateNet();
+
+// Leaderboard swipe-down to close
+let lbTouchY=0;
+document.getElementById('lb-panel').addEventListener('touchstart',e=>lbTouchY=e.touches[0].clientY);
+document.getElementById('lb-panel').addEventListener('touchend',e=>{
+  if(e.changedTouches[0].clientY-lbTouchY>60) closeLeaderboard();
+});
+</script>
+</body>
+</html>
